@@ -4,17 +4,17 @@ type
   Expr = object of RootObj
 
   Input = object of Expr
-    value: NimNode
+    symbol: NimNode
 
   AddExpr[T1, T2: Expr] = object of Expr
     lhs: T1
     rhs: T2
 
-proc input(value: NimNode): Input =
-  Input(value: value)
+proc input(symbol: NimNode): Input =
+  Input(symbol: symbol)
 
 proc eval(input: Input): NimNode =
-  input.value
+  input.symbol
 
 proc eval(addExpr: AddExpr): NimNode =
   newCall(ident"+", addExpr.lhs.eval, addExpr.rhs.eval)
