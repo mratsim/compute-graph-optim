@@ -299,8 +299,8 @@ In research, there are several approaches to handle that:
         - https://www.reddit.com/r/haskell/comments/6ugzhe/walking_the_ast_without_the_visitor_pattern/
         - https://play.rust-lang.org/?gist=1f7e5a01ec3d0010c50ecbccf93ad66b&version=nightly
         - [Functional Implementation of Multiple Traversals Program with Attribute Grammars in Scala](www.scholarpublishing.org/index.php/TMLAI/article/download/3397/1944)
-  - Catamorphisms
-  - Transducers: https://effectful.js.org/posts/simple-transducers-javascript.html
+  - Catamorphisms: https://medium.com/@olxc/catamorphisms-and-f-algebras-b4e91380d134
+  - Transducers: http://sixty-north.com/blog/deriving-transducers-from-first-principles.html
   - Visitor vs Interpreter Pattern: https://homepages.cwi.nl/~storm/publications/visitor.pdf
   - Datatypes à la carte: http://www.cs.ru.nl/~W.Swierstra/Publications/DataTypesALaCarte.pdf
   - Functional Lenses / Multiplates: http://de.arxiv.org/ftp/arxiv/papers/1103/1103.2841.pdf

@@ -23,8 +23,8 @@ proc `+`[T1, T2: Expr](lhs: T1, rhs: T2): AddExpr[T1, T2] =
   result.lhs = lhs
   result.rhs = rhs
 
-let a{.compileTime.} = input newLit(1) # newIdentNode"a"
-let b{.compileTime.} = input newLit(3) # newIdentNode"b"
+let a{.compileTime.} = input newLit(1) # bindSym"x"
+let b{.compileTime.} = input newLit(3) # bindSym"y"
 
 let c{.compileTime.} = a + b
 
