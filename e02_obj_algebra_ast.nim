@@ -34,7 +34,7 @@ macro foo(a, b: int): untyped =
   let val_C = eval(c)
   echo val_C.repr
 
-  result = quote do: `val_C`
+  result = val_C
 
 
 let a = 1
