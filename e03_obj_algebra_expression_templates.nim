@@ -1,3 +1,5 @@
+# Object Algebra DSL for C++-like expression templates
+
 import macros
 
 type

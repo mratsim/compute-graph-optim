@@ -1,3 +1,5 @@
+# Object Algebra DSL with AST nodes
+
 import macros
 
 type

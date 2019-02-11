@@ -1,3 +1,6 @@
+# Object Algebra DSL for C++-like expression templates
+# with AST symbols
+
 import macros
 
 type

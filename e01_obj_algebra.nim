@@ -1,3 +1,5 @@
+# Object Algebra DSL
+
 type
   Expr = object of RootObj
 
