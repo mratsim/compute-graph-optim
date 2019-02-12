@@ -119,6 +119,17 @@ Halide has been expanded with autodiff capabilities in [gradient-halide](https:/
 - Intel PlaidML: https://github.com/plaidml/plaidml
 - The Tensor Algebra Compiler: https://github.com/tensor-compiler/taco
 - Numba: http://numba.pydata.org (less related as it doesn't compile Expression Graphs)
+- PyGPU (2006): An embedded DSL for high speed image processing
+    - [Techniques for implementing embedded domain specific languages in dynamic languages](https://pdfs.semanticscholar.org/731a/19929d8b10c483eb46d6d8a9f27d5607f9d2.pdf)
+    - [High-speed GPU Programming](https://pdfs.semanticscholar.org/731a/19929d8b10c483eb46d6d8a9f27d5607f9d2.pdf) (thesis)
+- Stanford's Delite and OptiML (2011):
+  - [An heterogeneous parellel framework for DSL](https://stanford-ppl.github.io/website/papers/pact11-brown.pdf)
+  - [slides](http://on-demand.gputechconf.com/gtc/2012/presentations/S0365-Delite-A-Framework-for-Implementing-Heterogeneous-Parallel-DSLs.pdf)
+  - [OptiML: An Implicitly Parallel Domain-Specific Language for
+Machine Learning](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.220.1967&rep=rep1&type=pdf)
+  - [Building Blocks for Performance oriented DSL](https://arxiv.org/pdf/1109.0778.pdf)
+  - http://stanford-ppl.github.io/Delite/optiml/index.html
+  - https://github.com/stanford-ppl/hyperdsl
 
 ### Approaches to porting
 
