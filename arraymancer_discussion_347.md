@@ -130,6 +130,9 @@ Machine Learning](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.220.1
   - [Building Blocks for Performance oriented DSL](https://arxiv.org/pdf/1109.0778.pdf)
   - http://stanford-ppl.github.io/Delite/optiml/index.html
   - https://github.com/stanford-ppl/hyperdsl
+- DLVM Deep Learning Virtual Machine (2017 - Authors migrated to Swift for Tensorflow)
+  - https://arxiv.org/pdf/1711.03016.pdf
+  - https://github.com/dlvm-team/dlvm-core
 
 ### Approaches to porting
 
