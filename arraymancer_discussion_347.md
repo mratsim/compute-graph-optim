@@ -123,6 +123,7 @@ Halide has been expanded with autodiff capabilities in [gradient-halide](https:/
     - [Techniques for implementing embedded domain specific languages in dynamic languages](https://pdfs.semanticscholar.org/731a/19929d8b10c483eb46d6d8a9f27d5607f9d2.pdf)
     - [High-speed GPU Programming](https://pdfs.semanticscholar.org/731a/19929d8b10c483eb46d6d8a9f27d5607f9d2.pdf) (thesis)
 - Stanford's Delite and OptiML (2011):
+  - [Delite: A Compiler Architecture for Performance-Oriented Embedded Domain-Specific Languages](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.452.416&rep=rep1&type=pdf)
   - [An heterogeneous parellel framework for DSL](https://stanford-ppl.github.io/website/papers/pact11-brown.pdf)
   - [slides](http://on-demand.gputechconf.com/gtc/2012/presentations/S0365-Delite-A-Framework-for-Implementing-Heterogeneous-Parallel-DSLs.pdf)
   - [OptiML: An Implicitly Parallel Domain-Specific Language for
@@ -318,4 +319,13 @@ In research, there are several approaches to handle that:
   - Visitor vs Interpreter Pattern: https://homepages.cwi.nl/~storm/publications/visitor.pdf
   - Datatypes à la carte: http://www.cs.ru.nl/~W.Swierstra/Publications/DataTypesALaCarte.pdf
   - Functional Lenses / Multiplates: http://de.arxiv.org/ftp/arxiv/papers/1103/1103.2841.pdf
+  - Monads (and Free Monads?):
+    - [Generic Monadic Construcs for Embedded Languages](https://pdfs.semanticscholar.org/0c92/4ead3a6d833e049d8f224fd0526f47760336.pdf)
   - Object Algebra, traversals, visitor patterns, church encoding: [paper](http://www.informatik.uni-marburg.de/~rendel/oa2ag/rendel14object.pdf) and [slides](http://ps.informatik.uni-tuebingen.de/2014/10/23/presentation-at-oopsla/slides.pdf).
+  - Developping extensible shallow embeddings (functions in host lang) on top of deep embeddings (fixed AST/IR):
+      - [Folding Domain Specific Language: Deep and Shallow Embedding](https://www.cs.ox.ac.uk/people/jeremy.gibbons/publications/embedding-short.pdf)
+      - [Combining Deep and SHallow Embedding for EDSL](http://www.cse.chalmers.se/~josefs/publications/TFP12.pdf) and [paper](http://www.cse.chalmers.se/~josefs/publications/svenningsson2015combining.pdf).
+      - [Yin-Yang: Concealing the Deep Embedding of DSLs](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.697.1002&rep=rep1&type=pdf) and [project report](https://geirsson.com/assets/directembedding-report.pdf).
+      - [Uniting Language Embedding for Fast and Friendly DSLs (thesis)](https://infoscience.epfl.ch/record/218036/files/EPFL_TH6882.pdf)
+      - [Rewriting a Shallow DSL using a GHC extension](https://ku-fpg.github.io/files/Grebe-17-Transformations.pdf)
+      - [An Image Processing Language: External and Shallow/Deep Embeddings](http://www.macs.hw.ac.uk/~rs46/papers/rwdsl2016/rwdsl-2016.pdf)
