@@ -68,8 +68,92 @@ func `*`*(a: Expr, b: SomeInteger): Expr =
     )
   )
 
-let foo = sym("a") + sym("b") + sym("c")
+static: # Check if working at compile-time
+  let foo = sym("a") + sym("b") + sym("c")
+  let bar = foo * 2
+  echo bar.repr
 
-let bar = foo * 2
+block: # Check if working at runtime
+  let foo = sym("a") + sym("b") + sym("c")
+  let bar = foo * 2
+  echo bar.repr
 
-echo bar.repr
+# ###########################
+#
+#     Compile AST to Nim
+#
+# ###########################
+
+import macros, tables, sequtils
+
+proc walkAST(e: AstNode): NimNode =
+  ## Recursively walk the expression AST
+  ## Append the corresponding Nim AST
+  ## Returns the new expression and node to reiterate from
+
+  case e.kind:
+  of Sym:
+    return newIdentNode e.symbol
+  of IntScalar:
+    return newLit e.intVal
+  of FloatScalar:
+    return newLit e.floatVal
+  of Add:
+    var callTree = nnkCall.newTree()
+    callTree.add newIdentNode"+"
+    callTree.add e.lhs.walkAST
+    callTree.add e.rhs.walkAST
+    return callTree
+  of Mul:
+    var callTree = nnkCall.newTree()
+    callTree.add newIdentNode"*"
+    callTree.add e.lhs.walkAST
+    callTree.add e.rhs.walkAST
+    return callTree
+
+macro compile(expression: static Expr, func_def: untyped): untyped =
+  # bar.compile:
+  #   func foobar[T](a, b, c: T): T
+  #
+  # func_def has the following form
+  #
+  #   StmtList
+  #     FuncDef
+  #       Ident "foobar"
+  #       Empty
+  #       GenericParams
+  #         IdentDefs
+  #           Ident "T"
+  #           Empty
+  #           Empty
+  #       FormalParams
+  #         Ident "T"
+  #         IdentDefs
+  #           Ident "a"
+  #           Ident "b"
+  #           Ident "c"
+  #           Ident "T"
+  #           Empty
+  #       Empty
+  #       Empty
+  #       Empty <---- proc body
+
+  ## Sanity checks
+  func_def.expectkind(nnkStmtList)
+  assert func_def.len == 1, "Only 1 statement is allowed, the function definition"
+  func_def[0].expectkind({nnkProcDef, nnkFuncDef})
+  # TODO: check that the function inputs are in a symbol table?
+  func_def[0][6].expectKind(nnkEmpty)
+
+  result = func_def.copyNimTree()         # Copy function definition
+  result[0][6] = expression.ast.walkAST   # Assign body
+
+  echo result.toStrLit
+
+let foo{.compileTime.} = sym("a") + sym("b") + sym("c")
+let bar{.compileTime.} = foo * 2
+bar.compile:
+  func foobar[T](a, b, c: T): T
+
+echo foobar(1, 2, 3)
+echo (1 + 2 + 3) * 2
