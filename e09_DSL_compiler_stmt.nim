@@ -119,8 +119,6 @@ proc `+=`*(a: var AstNode, b: AstNode) =
       prev_version: a
     )
 
-  echo a.repr
-
 # ###########################
 #
 #     Compile AST to Nim
@@ -138,7 +136,6 @@ proc walkASTGeneric(e: AstNode, visited: var HashSet[AstNode]): NimNode =
     return newIdentNode e.symIn
     # Todo if input is another function, resolve and fuse
   of Output, LVal:
-
     let symNode = block:
       if e.genSym:
         genSym(nskVar, e.symLVal)
@@ -147,7 +144,10 @@ proc walkASTGeneric(e: AstNode, visited: var HashSet[AstNode]): NimNode =
     if e.prev_version.isNil:
       return symNode
     else:
-      return e.prev_version.walkASTGeneric(visited)
+      if e.genSym:
+        return newVarStmt(symNode, e.prev_version.walkASTGeneric(visited))
+      else:
+        return e.prev_version.walkASTGeneric(visited)
   of IntScalar:
     return newLit e.intVal
   of FloatScalar:
@@ -236,6 +236,19 @@ macro compile(io: static varargs[AstNode], procDef: untyped): untyped =
           procIdents[i],
           inOutVar.walkASTGeneric(visitedNodes)
         )
+      elif inOutVar.kind == LVal:
+        # It's actually a mutable output declared with
+        # var foo = 1
+        # foo += 1  <---- will transform into LVal
+        let varAsgnStmt = inOutVar.walkASTGeneric(visitedNodes)
+        body.add varAsgnStmt
+        body.add nnkAsgn.newTree(
+          nnkDotExpr.newTree(
+            newIdentNode"result",
+            procIdents[i]
+          ),
+          varAsgnStmt[0][0]
+        )
       else:
         # Expression
         if resultTy.kind == nnkTupleTy:
@@ -252,7 +265,6 @@ macro compile(io: static varargs[AstNode], procDef: untyped): untyped =
   result = procDef.copyNimTree()
   result[0][6] = body   # Assign to proc body
 
-  # echo body.toStrLit
   echo result.toStrLit
 
 
@@ -267,11 +279,11 @@ let
 var baz {.compileTime.} = foo * 3
 
 static:
-  baz += a
+  baz += a * 2
+  echo baz.repr
 
 compile([a, b, c, bar, baz]):
   proc foobar[T](a, b, c: T): tuple[bar, baz: T]
-
 
 let (ping, pong) = foobar(1, 2, 3)
 
