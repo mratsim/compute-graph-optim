@@ -84,12 +84,9 @@ block: # Check if working at runtime
 #
 # ###########################
 
-import macros, tables, sequtils
-
 proc walkAST(e: AstNode): NimNode =
   ## Recursively walk the expression AST
   ## Append the corresponding Nim AST
-  ## Returns the new expression and node to reiterate from
 
   case e.kind:
   of Sym:
