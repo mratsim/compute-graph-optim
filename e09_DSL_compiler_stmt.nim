@@ -30,6 +30,7 @@ type
     Input       # Input tensor node
     Output      # Mutable output tensor node
     LVal        # Temporary allocated node
+    Asgn        # Assignment statement
 
   AstNode = ref object
     case kind: AstNodeKind
@@ -37,13 +38,13 @@ type
       symIn: string              # Avoid alloc? single char? NimNode? static?
     of Output, LVal:
       symLval: string
+      expression: AstNode        # Only for LVal, track expression value before assignment
       prev_version: AstNode      # Persistent data structure
-      genSym: bool
     of IntScalar:
       intVal: int                # type to use? int64?
     of FloatScalar:
       floatVal: float
-    of Add, Mul:
+    of Asgn, Add, Mul:
       lhs, rhs: AstNode
 
     ctHash: Hash                 # Compile-Time only Hash
@@ -92,9 +93,9 @@ proc `*`*(a: AstNode, b: SomeInteger): AstNode =
         rhs: AstNode(kind: IntScalar, intVal: b)
       )
 
-func `[]=`*[N: static int](a: var AstNode, coords: array[N, Coord], b: AstNode) =
-  assert a.kind == Output
-  a.ast_versions.add b
+# func `[]=`*[N: static int](a: var AstNode, coords: array[N, Coord], b: AstNode) =
+#   assert a.kind == Output
+#   a.ast_versions.add b
 
 proc `+=`*(a: var AstNode, b: AstNode) =
   assert a.kind notin {Input, IntScalar, FloatScalar}
@@ -102,22 +103,68 @@ proc `+=`*(a: var AstNode, b: AstNode) =
     a = AstNode(
       ctHash: a.ctHash, # Keep the hash
       kind: LVal,
-      symLVal: "lval__",
-      prev_version: a,
-      genSym: true
+      symLVal: "lval__" & $a.ctHash, # Generate unique symbol
+      prev_version: nil,
+      expression: a
     )
   if a.kind == Output:
     a = AstNode(
       ctHash: genHash(),
       kind: Output,
-      prev_version: a
-    )
+      symLVal: a.symLVal, # Keep original unique symbol
+      prev_version: AstNode(
+        ctHash: genHash(),
+        kind: Asgn,
+        lhs: a,
+        rhs: a + b
+      )
+    ) 
   else:
     a = AstNode(
       ctHash: genHash(),
       kind: LVal,
-      prev_version: a
+      symLVal: a.symLVal, # Keep original unique symbol
+      prev_version: AstNode(
+        ctHash: genHash(),
+        kind: Asgn,
+        lhs: a,
+        rhs: a + b
+      )
     )
+
+# ###########################
+#
+#     Print AST
+#
+# ###########################
+import strutils
+
+proc `$`(ast: AstNode): string =
+  proc inspect(ast: AstNode, indent: int): string =
+    result.add '\n' & repeat(' ', indent) & $ast.kind
+    let indent = indent + 2
+    case ast.kind
+    of Input:
+      result.add '\n' & repeat(' ', indent) & "symIn \"" & ast.symIn & "\""      
+    of Output, LVal:
+      result.add '\n' & repeat(' ', indent) & "symLVal \"" & ast.symLVal & "\""
+      if ast.expression.isNil:
+        result.add '\n' & repeat(' ', indent) & "expression: nil"
+      else:
+        result.add repeat(' ', indent) & inspect(ast.expression, indent)
+      if ast.prev_version.isNil:
+        result.add '\n' & repeat(' ', indent) & "prev_version: nil"
+      else:
+        result.add repeat(' ', indent) & inspect(ast.prev_version, indent)
+      
+    of IntScalar:
+      result.add '\n' & repeat(' ', indent) & $ast.intVal
+    of FloatScalar:
+      result.add '\n' & repeat(' ', indent) & $ast.floatVal
+    of Asgn, Add, Mul:
+      result.add repeat(' ', indent) & inspect(ast.lhs, indent)
+      result.add repeat(' ', indent) & inspect(ast.rhs, indent)
+  result = inspect(ast, 0)
 
 # ###########################
 #
@@ -133,32 +180,48 @@ proc walkASTGeneric(e: AstNode, visited: var HashSet[AstNode]): NimNode =
 
   case e.kind:
   of Input:
+    visited.incl e
     return newIdentNode e.symIn
     # Todo if input is another function, resolve and fuse
+  of Asgn:
+    let symNode = newIdentNode(e.lhs.symLVal)
+    if e.lhs in visited:
+      return symNode
+    elif e.lhs.prev_version.isNil:
+      visited.incl e
+      var asgnUpdate = newStmtList()
+      if e.lhs.kind == LVal:
+        asgnUpdate.add newVarStmt(symNode, e.lhs.expression.walkASTGeneric(visited))
+      asgnUpdate.add newAssignment(symNode, e.rhs.walkASTGeneric(visited))
+      return asgnUpdate
+    else:
+      visited.incl e
+      var asgnUpdate = newStmtList()
+      asgnUpdate.add e.lhs.prev_version.walkASTGeneric(visited)
+      asgnUpdate.add newAssignment(e.lhs.walkASTGeneric(visited), e.rhs.walkASTGeneric(visited))
+      return asgnUpdate
   of Output, LVal:
-    let symNode = block:
-      if e.genSym:
-        genSym(nskVar, e.symLVal)
-      else:
-        newIdentNode(e.symLVal)
-    if e.prev_version.isNil:
+    let symNode = newIdentNode(e.symLVal)
+    if e in visited or e.prev_version.isNil:
       return symNode
     else:
-      if e.genSym:
-        return newVarStmt(symNode, e.prev_version.walkASTGeneric(visited))
-      else:
-        return e.prev_version.walkASTGeneric(visited)
+      visited.incl e
+      return e.prev_version.walkASTGeneric(visited)
   of IntScalar:
+    visited.incl e
     return newLit e.intVal
   of FloatScalar:
+    visited.incl e
     return newLit e.floatVal
   of Add:
+    visited.incl e
     var callTree = nnkCall.newTree()
     callTree.add newIdentNode"+"
     callTree.add e.lhs.walkASTGeneric(visited)
     callTree.add e.rhs.walkASTGeneric(visited)
     return callTree
   of Mul:
+    visited.incl e
     var callTree = nnkCall.newTree()
     callTree.add newIdentNode"*"
     callTree.add e.lhs.walkASTGeneric(visited)
@@ -168,11 +231,11 @@ proc walkASTGeneric(e: AstNode, visited: var HashSet[AstNode]): NimNode =
 macro compile(io: static varargs[AstNode], procDef: untyped): untyped =
   # Note: io must be an array - https://github.com/nim-lang/Nim/issues/10691
 
-  # compile(a, b, c):
-  #   proc foobar[T](a: var T, b, c: T): T
+  # compile([a, b, c, bar, baz, buzz]):
+  #   proc foobar[T](a, b, c: T): tuple[bar, baz, buzz: T]
   #
   # StmtList
-  #   FuncDef
+  #   ProcDef
   #     Ident "foobar"
   #     Empty
   #     GenericParams
@@ -185,6 +248,7 @@ macro compile(io: static varargs[AstNode], procDef: untyped): untyped =
   #         IdentDefs
   #           Ident "bar"
   #           Ident "baz"
+  #           Ident "buzz"
   #           Ident "T"
   #           Empty
   #       IdentDefs
@@ -196,7 +260,8 @@ macro compile(io: static varargs[AstNode], procDef: untyped): untyped =
   #     Empty
   #     Empty
   #     Empty
-  #   echo procDef.treerepr
+
+  # echo procDef.treerepr
 
   ## Sanity checks
   procDef.expectkind(nnkStmtList)
@@ -240,14 +305,19 @@ macro compile(io: static varargs[AstNode], procDef: untyped): untyped =
         # It's actually a mutable output declared with
         # var foo = 1
         # foo += 1  <---- will transform into LVal
+
+        echo inOutVar
         let varAsgnStmt = inOutVar.walkASTGeneric(visitedNodes)
+
+        echo varAsgnStmt.treerepr 
+
         body.add varAsgnStmt
         body.add nnkAsgn.newTree(
           nnkDotExpr.newTree(
             newIdentNode"result",
             procIdents[i]
           ),
-          varAsgnStmt[0][0]
+          varAsgnStmt[1][0]
         )
       else:
         # Expression
@@ -277,15 +347,16 @@ let
   bar {.compileTime.} = foo * 2
 
 var baz {.compileTime.} = foo * 3
+var buzz {.compileTime.} = baz
 
 static:
-  baz += a * 2
-  echo baz.repr
+  buzz += a * 10000
 
-compile([a, b, c, bar, baz]):
-  proc foobar[T](a, b, c: T): tuple[bar, baz: T]
+compile([a, b, c, bar, baz, buzz]):
+  proc foobar[T](a, b, c: T): tuple[bar, baz, buzz: T]
 
-let (ping, pong) = foobar(1, 2, 3)
+let (pim, pam, poum) = foobar(1, 2, 3)
 
-echo ping
-echo pong
+echo pim # 12
+echo pam # 18
+echo poum # 10018
