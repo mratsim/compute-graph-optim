@@ -38,7 +38,6 @@ type
       symIn: string              # Avoid alloc? single char? NimNode? static?
     of Output, LVal:
       symLval: string
-      expression: AstNode        # Only for LVal, track expression value before assignment
       prev_version: AstNode      # Persistent data structure
     of IntScalar:
       intVal: int                # type to use? int64?
@@ -101,11 +100,20 @@ proc `+=`*(a: var AstNode, b: AstNode) =
   assert a.kind notin {Input, IntScalar, FloatScalar}
   if a.kind notin {Output, LVal}:
     a = AstNode(
-      ctHash: a.ctHash, # Keep the hash
-      kind: LVal,
-      symLVal: "lval__" & $a.ctHash, # Generate unique symbol
-      prev_version: nil,
-      expression: a
+          ctHash: genHash(),
+          kind: LVal,
+          symLVal: "lval__" & $a.ctHash, # Generate unique symbol
+          prev_version: AstNode(
+            cthash: genHash(),
+            kind: Asgn,
+            lhs: AstNode(
+              ctHash: a.ctHash, # Keep the hash
+              kind: LVal,
+              symLVal: "lval__" & $a.ctHash, # Generate unique symbol
+              prev_version: nil,
+            ),
+            rhs: a
+          )
     )
   if a.kind == Output:
     a = AstNode(
@@ -148,15 +156,10 @@ proc `$`(ast: AstNode): string =
       result.add '\n' & repeat(' ', indent) & "symIn \"" & ast.symIn & "\""      
     of Output, LVal:
       result.add '\n' & repeat(' ', indent) & "symLVal \"" & ast.symLVal & "\""
-      if ast.expression.isNil:
-        result.add '\n' & repeat(' ', indent) & "expression: nil"
-      else:
-        result.add repeat(' ', indent) & inspect(ast.expression, indent)
       if ast.prev_version.isNil:
         result.add '\n' & repeat(' ', indent) & "prev_version: nil"
       else:
         result.add repeat(' ', indent) & inspect(ast.prev_version, indent)
-      
     of IntScalar:
       result.add '\n' & repeat(' ', indent) & $ast.intVal
     of FloatScalar:
@@ -185,24 +188,30 @@ proc walkASTGeneric(e: AstNode, visited: var HashSet[AstNode]): NimNode =
     # Todo if input is another function, resolve and fuse
   of Asgn:
     let symNode = newIdentNode(e.lhs.symLVal)
+    if e in visited:
+      return symNode
+
+    visited.incl e
     if e.lhs in visited:
       return symNode
     elif e.lhs.prev_version.isNil:
-      visited.incl e
       var asgnUpdate = newStmtList()
-      if e.lhs.kind == LVal:
-        asgnUpdate.add newVarStmt(symNode, e.lhs.expression.walkASTGeneric(visited))
-      asgnUpdate.add newAssignment(symNode, e.rhs.walkASTGeneric(visited))
+      if e.lhs.kind == LVal and e.lhs.prev_version.isNil:
+        asgnUpdate.add newVarStmt(symNode, e.rhs.walkASTGeneric(visited))
+      else:
+        asgnUpdate.add newAssignment(symNode, e.rhs.walkASTGeneric(visited))
       return asgnUpdate
     else:
-      visited.incl e
       var asgnUpdate = newStmtList()
       asgnUpdate.add e.lhs.prev_version.walkASTGeneric(visited)
       asgnUpdate.add newAssignment(e.lhs.walkASTGeneric(visited), e.rhs.walkASTGeneric(visited))
       return asgnUpdate
   of Output, LVal:
     let symNode = newIdentNode(e.symLVal)
-    if e in visited or e.prev_version.isNil:
+    if e in visited:
+      return symNode
+    elif e.prev_version.isNil:
+      visited.incl e
       return symNode
     else:
       visited.incl e
@@ -317,7 +326,7 @@ macro compile(io: static varargs[AstNode], procDef: untyped): untyped =
             newIdentNode"result",
             procIdents[i]
           ),
-          varAsgnStmt[1][0]
+          varAsgnStmt[0][0][0][0]
         )
       else:
         # Expression
