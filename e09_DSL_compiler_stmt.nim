@@ -30,7 +30,7 @@ type
     Input       # Input tensor node
     Output      # Mutable output tensor node
     LVal        # Temporary allocated node
-    Asgn        # Assignment statement
+    Assign      # Assignment statement
 
   AstNode = ref object
     case kind: AstNodeKind
@@ -43,7 +43,7 @@ type
       intVal: int                # type to use? int64?
     of FloatScalar:
       floatVal: float
-    of Asgn, Add, Mul:
+    of Assign, Add, Mul:
       lhs, rhs: AstNode
 
     ctHash: Hash                 # Compile-Time only Hash
@@ -105,7 +105,7 @@ proc `+=`*(a: var AstNode, b: AstNode) =
           symLVal: "lval__" & $a.ctHash, # Generate unique symbol
           prev_version: AstNode(
             cthash: genHash(),
-            kind: Asgn,
+            kind: Assign,
             lhs: AstNode(
               ctHash: a.ctHash, # Keep the hash
               kind: LVal,
@@ -122,7 +122,7 @@ proc `+=`*(a: var AstNode, b: AstNode) =
       symLVal: a.symLVal, # Keep original unique symbol
       prev_version: AstNode(
         ctHash: genHash(),
-        kind: Asgn,
+        kind: Assign,
         lhs: a,
         rhs: a + b
       )
@@ -134,7 +134,7 @@ proc `+=`*(a: var AstNode, b: AstNode) =
       symLVal: a.symLVal, # Keep original unique symbol
       prev_version: AstNode(
         ctHash: genHash(),
-        kind: Asgn,
+        kind: Assign,
         lhs: a,
         rhs: a + b
       )
@@ -164,7 +164,7 @@ proc `$`(ast: AstNode): string =
       result.add '\n' & repeat(' ', indent) & $ast.intVal
     of FloatScalar:
       result.add '\n' & repeat(' ', indent) & $ast.floatVal
-    of Asgn, Add, Mul:
+    of Assign, Add, Mul:
       result.add repeat(' ', indent) & inspect(ast.lhs, indent)
       result.add repeat(' ', indent) & inspect(ast.rhs, indent)
   result = inspect(ast, 0)
@@ -186,7 +186,7 @@ proc walkASTGeneric(e: AstNode, visited: var HashSet[AstNode]): NimNode =
     visited.incl e
     return newIdentNode e.symIn
     # Todo if input is another function, resolve and fuse
-  of Asgn:
+  of Assign:
     let symNode = newIdentNode(e.lhs.symLVal)
     if e in visited:
       return symNode
@@ -195,17 +195,15 @@ proc walkASTGeneric(e: AstNode, visited: var HashSet[AstNode]): NimNode =
     if e.lhs in visited:
       return symNode
     elif e.lhs.prev_version.isNil:
-      var asgnUpdate = newStmtList()
-      if e.lhs.kind == LVal and e.lhs.prev_version.isNil:
-        asgnUpdate.add newVarStmt(symNode, e.rhs.walkASTGeneric(visited))
+      if e.lhs.kind == LVal:
+        return newVarStmt(symNode, e.rhs.walkASTGeneric(visited))
       else:
-        asgnUpdate.add newAssignment(symNode, e.rhs.walkASTGeneric(visited))
-      return asgnUpdate
+        return newAssignment(symNode, e.rhs.walkASTGeneric(visited))
     else:
-      var asgnUpdate = newStmtList()
-      asgnUpdate.add e.lhs.prev_version.walkASTGeneric(visited)
-      asgnUpdate.add newAssignment(e.lhs.walkASTGeneric(visited), e.rhs.walkASTGeneric(visited))
-      return asgnUpdate
+      var assignUpdate = newStmtList()
+      assignUpdate.add e.lhs.prev_version.walkASTGeneric(visited)
+      assignUpdate.add newAssignment(e.lhs.walkASTGeneric(visited), e.rhs.walkASTGeneric(visited))
+      return assignUpdate
   of Output, LVal:
     let symNode = newIdentNode(e.symLVal)
     if e in visited:
@@ -316,17 +314,17 @@ macro compile(io: static varargs[AstNode], procDef: untyped): untyped =
         # foo += 1  <---- will transform into LVal
 
         echo inOutVar
-        let varAsgnStmt = inOutVar.walkASTGeneric(visitedNodes)
+        let varAssignStmt = inOutVar.walkASTGeneric(visitedNodes)
 
-        echo varAsgnStmt.treerepr 
+        echo varAssignStmt.treerepr 
 
-        body.add varAsgnStmt
+        body.add varAssignStmt
         body.add nnkAsgn.newTree(
           nnkDotExpr.newTree(
             newIdentNode"result",
             procIdents[i]
           ),
-          varAsgnStmt[0][0][0][0]
+          varAssignStmt[1][0]
         )
       else:
         # Expression
