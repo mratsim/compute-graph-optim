@@ -218,9 +218,10 @@ proc walkASTGeneric(ast: AstNode, visited: var Table[AstNode, NimNode], stmts: v
 
         var lhs: NimNode
         if ast.lhs notin visited:
-          if ast.lhs.kind == LVal and ast.lhs.prev_version.isNil:
+          if ast.lhs.kind == LVal and
+              ast.lhs.prev_version.isNil and
+              ast.rhs notin visited:
             varAssign = true
-            visited[ast] = newIdentNode(ast.lhs.symLVal)
           var lhsStmt = newStmtList()
           lhs = walkASTGeneric(ast.lhs, visited, lhsStmt)
           stmts.add lhsStmt
