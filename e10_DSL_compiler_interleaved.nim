@@ -103,15 +103,15 @@ proc `+=`*(a: var AstNode, b: AstNode) =
     a = AstNode(
           ctHash: genHash(),
           kind: LVal,
-          symLVal: "lval__" & $a.ctHash, # Generate unique symbol
+          symLVal: "localvar__" & $a.ctHash, # Generate unique symbol
           version: 1,
           prev_version: AstNode(
-            cthash: genHash(),
+            cthash: a.ctHash,
             kind: Assign,
             lhs: AstNode(
               ctHash: a.ctHash, # Keep the hash
               kind: LVal,
-              symLVal: "lval__" & $a.ctHash, # Generate unique symbol
+              symLVal: "localvar__" & $a.ctHash, # Generate unique symbol
               version: 0,
               prev_version: nil,
             ),
@@ -125,7 +125,7 @@ proc `+=`*(a: var AstNode, b: AstNode) =
       symLVal: a.symLVal, # Keep original unique symbol
       version: a.version + 1,
       prev_version: AstNode(
-        ctHash: genHash(),
+        ctHash: a.ctHash,
         kind: Assign,
         lhs: a,
         rhs: a + b
@@ -138,7 +138,7 @@ proc `+=`*(a: var AstNode, b: AstNode) =
       symLVal: a.symLVal, # Keep original unique symbol
       version: a.version + 1,
       prev_version: AstNode(
-        ctHash: genHash(),
+        ctHash: a.ctHash,
         kind: Assign,
         lhs: a,
         rhs: a + b
@@ -218,12 +218,12 @@ proc walkASTGeneric(ast: AstNode, visited: var Table[AstNode, NimNode], stmts: v
 
         var lhs: NimNode
         if ast.lhs notin visited:
+          if ast.lhs.kind == LVal and ast.lhs.prev_version.isNil:
+            varAssign = true
+            visited[ast] = newIdentNode(ast.lhs.symLVal)
           var lhsStmt = newStmtList()
           lhs = walkASTGeneric(ast.lhs, visited, lhsStmt)
           stmts.add lhsStmt
-          # visited[ast.lhs] = lhs # Done in walkAST
-          if ast.lhs.kind == LVal and ast.lhs.prev_version.isNil:
-            varAssign = true
         else:
           lhs = visited[ast.lhs]
 
@@ -242,7 +242,6 @@ proc walkASTGeneric(ast: AstNode, visited: var Table[AstNode, NimNode], stmts: v
             stmts.add newVarStmt(lhs, rhs)
           else:
             stmts.add newAssignment(lhs, rhs)
-          visited[ast] = lhs
           return lhs
         else:
           var callStmt = nnkCall.newTree()
@@ -325,10 +324,6 @@ macro compile(io: static varargs[AstNode], procDef: untyped): untyped =
   for i, inOutVar in io:
     if inOutVar.kind != Input:
       if inOutVar.kind in {Output, LVal}:
-        echo "###################"
-        echo "Output/LVal"
-        echo "inOutVar (", i, ')'
-        echo inOutVar
         let sym = walkASTGeneric(inOutVar, visitedNodes, body)
         sym.expectKind nnkIdent
         if resultTy.kind == nnkTupleTy:
@@ -345,11 +340,6 @@ macro compile(io: static varargs[AstNode], procDef: untyped): untyped =
             sym
           )
       else:
-        # Expression
-        echo "###################"
-        echo "Expression"
-        echo "inOutVar (", i, ')'
-        echo inOutVar
         let expression = walkASTGeneric(inOutVar, visitedNodes, body)
         if resultTy.kind == nnkTupleTy:
           body.add newAssignment(
@@ -369,7 +359,6 @@ macro compile(io: static varargs[AstNode], procDef: untyped): untyped =
   result[0][6] = body   # Assign to proc body
 
   echo result.toStrLit
-
 
 let
   a {.compileTime.} = input("a")
@@ -393,5 +382,5 @@ compile([a, b, c, bar, baz, buzz]):
 let (pim, pam, poum) = foobar(1, 2, 3)
 
 echo pim # 12
-echo pam # 18
-echo poum # 10018
+echo pam # 20
+echo poum # 10020
