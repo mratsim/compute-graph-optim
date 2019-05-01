@@ -636,82 +636,84 @@ proc vectorize(
       result.add quote do:
         doAssert `align0` == `align_i`
 
-  # Loop index, destination(s) and function call
-  let idx = newIdentNode("idx_")
   let idxPeeling = newIdentNode("idxPeeling_")
   
-  # Src params / Function call
-  var fcall = nnkCall.newTree()
-  var fcall_simd = nnkCall.newTree()
-  fcall.add funcName
-  fcall_simd.add funcName
-  for p in ptrs.inParams:
-    let elem = nnkBracketExpr.newTree(p, idx)
-    fcall.add elem
-    fcall_simd.add newCall(
-      SimdTable[arch][simdLoadA],
-      newCall(
-        newidentNode"addr",
-        elem
-      )
-    )
 
-  # Destination params
-  # Assuming we have a function called the following way
-  # (r0, r1) = foo(s0, s1)
-  # We can use tuples for the non-SIMD part
-  # but we will need temporaries for the SIMD part
-  # before calling simdStore
-  var dst: NimNode
-  var dst_simd_tmp: NimNode
-  var dst_init = nnkVarSection.newTree(
-    nnkIdentDefs.newTree()
-  )
-  var dst_assign = newStmtList()
-
-  if ptrs.outParams.len > 1:
-    dst = nnkPar.newTree()
-    dst_simd_tmp = nnkPar.newTree()
-    for p in ptrs.outParams:
+  proc elems(idx: NimNode, simd: bool): tuple[fcall, dst, dst_init, dst_assign: NimNode] =
+    ## Note we need a separate ident node for each for loops
+    ## otherwise the C codegen is wrong
+    # Src params / Function call
+    result.fcall = nnkCall.newTree()
+    result.fcall.add funcName
+    for p in ptrs.inParams:
       let elem = nnkBracketExpr.newTree(p, idx)
-      let tmp = newIdentNode($p & "_simd")
-      dst.add elem
-      dst_simd_tmp.add tmp
-      dst_init[0].add nnkPragmaExpr.newTree(
-        tmp,
-        nnkPragma.newTree(
-          newIdentNode"noInit"
+      if not simd:
+        result.fcall.add elem
+      else:
+        result.fcall.add newCall(
+          SimdTable[arch][simdLoadA],
+          newCall(
+            newidentNode"addr",
+            elem
           )
-      )
-      dst_assign.add newCall(
-        SimdTable[arch][simdStoreA],
-        newCall(
-          newidentNode"addr",
-          elem
-        ),
-        tmp
-      )
-  elif ptrs.outParams.len == 1:
-    let elem = nnkBracketExpr.newTree(ptrs.outParams[0], idx)
-    dst = elem
-    let tmp = newIdentNode($ptrs.outParams[0] & "_simd")
-    dst_simd_tmp.add tmp
-    dst_assign.add newCall(
-      SimdTable[arch][simdStoreA],
-      elem,
-      tmp
-    )
-  dst_init[0].add SimdTable[arch][simdType]
-  dst_init[0].add newEmptyNode()
+        )
 
-  # Scalar function call
-  let scalarCall = block:
-    if ptrs.outParams.len > 0:
-      newAssignment(dst, fcall)
-    else:
-      fcall
+    # Destination params
+    # Assuming we have a function called the following way
+    # (r0, r1) = foo(s0, s1)
+    # We can use tuples for the non-SIMD part
+    # but we will need temporaries for the SIMD part
+    # before calling simdStore
+
+    # temp variable around bug? can't use result.dst_init[0].add, type mismatch on tuple sig
+    var dst_init = nnkVarSection.newTree( 
+      nnkIdentDefs.newTree()
+    )
+    result.dst_assign = newStmtList()
+
+    if ptrs.outParams.len > 1:
+      result.dst = nnkPar.newTree()
+      for p in ptrs.outParams:
+        let elem = nnkBracketExpr.newTree(p, idx)
+        if not simd:
+          result.dst.add elem
+        else:
+          let tmp = newIdentNode($p & "_simd")
+          result.dst.add tmp
+          dst_init[0].add nnkPragmaExpr.newTree(
+            tmp,
+            nnkPragma.newTree(
+              newIdentNode"noInit"
+              )
+          )
+          result.dst_assign.add newCall(
+            SimdTable[arch][simdStoreA],
+            newCall(
+              newidentNode"addr",
+              elem
+            ),
+            tmp
+          )
+    elif ptrs.outParams.len == 1:
+      let elem = nnkBracketExpr.newTree(ptrs.outParams[0], idx)
+      if not simd:
+        result.dst = elem
+      else:
+        let tmp = newIdentNode($ptrs.outParams[0] & "_simd")
+        result.dst = tmp
+        result.dst_assign.add newCall(
+          SimdTable[arch][simdStoreA],
+          elem,
+          tmp
+        )
+
+    dst_init[0].add SimdTable[arch][simdType]
+    dst_init[0].add newEmptyNode()
+
+    result.dst_init = dst_init
 
   block: # Loop peeling
+    let idx = newIdentNode("idx_")
     result.add newVarStmt(idxPeeling, newLit 0)
     let whileTest = nnkInfix.newTree(
       newIdentNode"!=",
@@ -719,9 +721,13 @@ proc vectorize(
       newLit 0
     )
     var whileBody = newStmtList()
+    let (fcall, dst, _, _) = elems(idx, simd = false)
 
     whileBody.add newLetStmt(idx, idxPeeling)
-    whileBody.add scalarCall  
+    if ptrs.outParams.len > 0:
+      whileBody.add newAssignment(dst, fcall)
+    else:
+      whileBody.add fcall
     whileBody.add newCall(newIdentNode"inc", idxPeeling)
 
     result.add nnkWhileStmt.newTree(
@@ -731,10 +737,12 @@ proc vectorize(
   
   let unroll_stop = newIdentNode("unroll_stop_")
   block: # Aligned part
+    let idx = newIdentNode("idx_")
     result.add quote do:
       let `unroll_stop` = round_down_power_of_2(
         `len` - `idxPeeling`, `unroll_factor`)
 
+    let (fcall, dst, dst_init, dst_assign) = elems(idx, simd = true)
     if ptrs.outParams.len > 0:
       result.add dst_init
     
@@ -752,14 +760,15 @@ proc vectorize(
     )
     if ptrs.outParams.len > 0:
       forStmt.add nnkStmtList.newTree(
-        newAssignment(dst_simd_tmp, fcall_simd),
+        newAssignment(dst, fcall),
         dst_assign
       )
     else:
-      forStmt.add fcall_simd  
+      forStmt.add fcall  
     result.add forStmt
 
   block: # Remainder
+    let idx = newIdentNode("idx_")
     var forStmt = nnkForStmt.newTree()
     forStmt.add idx
     forStmt.add nnkInfix.newTree(
@@ -767,7 +776,11 @@ proc vectorize(
         unroll_stop,
         len
       )
-    forStmt.add scalarCall
+    let (fcall, dst, _, _) = elems(idx, simd = false)
+    if ptrs.outParams.len > 0:
+      forStmt.add newAssignment(dst, fcall)
+    else:
+      forStmt.add fcall
     result.add forStmt
 
   # echo result.toStrLit
