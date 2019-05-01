@@ -687,7 +687,7 @@ proc vectorize(
               )
           )
           result.dst_assign.add newCall(
-            SimdTable[arch][simdStoreA],
+            SimdTable[arch][simdStoreU], # TODO Alignment issue
             newCall(
               newidentNode"addr",
               elem
@@ -702,7 +702,7 @@ proc vectorize(
         let tmp = newIdentNode($ptrs.outParams[0] & "_simd")
         result.dst = tmp
         result.dst_assign.add newCall(
-          SimdTable[arch][simdStoreA],
+          SimdTable[arch][simdStoreU], # TODO Alignment issue
           elem,
           tmp
         )
