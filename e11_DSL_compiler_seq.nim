@@ -41,6 +41,7 @@ type
     simdAdd
     simdMul
     simdFma
+    simdType
 
 func mm_setzero_ps(): m128 {.importc: "_mm_setzero_ps", x86.}
 func mm_set1_ps(a: float32): m128 {.importc: "_mm_set1_ps", x86.}
@@ -80,7 +81,8 @@ proc genSimdTableX86(): array[SimdArch, array[SimdOp, NimNode]] =
     simdStoreU:    newIdentNode"mm_storeu_ps",
     simdAdd:       newIdentNode"mm_add_ps",
     simdMul:       newIdentNode"mm_mul_ps",
-    simdFma:       newIdentNode"sse_fma_fallback"
+    simdFma:       newIdentNode"sse_fma_fallback",
+    simdType:      newIdentNode"m128"
   ]
 
   let avx: array[SimdOp, NimNode] = [
@@ -92,7 +94,8 @@ proc genSimdTableX86(): array[SimdArch, array[SimdOp, NimNode]] =
     simdStoreU:    newIdentNode"mm256_storeu_ps",
     simdAdd:       newIdentNode"mm256_add_ps",
     simdMul:       newIdentNode"mm256_mul_ps",
-    simdFma:       newIdentNode"avx_fma_fallback"
+    simdFma:       newIdentNode"avx_fma_fallback",
+    simdType:      newIdentNode"m256"
   ]
 
   var avx_fma = avx
@@ -128,45 +131,6 @@ template assume_aligned*[T](data: ptr T, alignment: static int = 64): ptr T =
     cast[ptr T](builtin_assume_aligned(data, alignment))
   else:
     data
-
-template vectorize(
-      wrapped_func,
-      funcname: untyped,
-      arch: static SimdArch,
-      alignNeeded,
-      unroll_factor: static int) =
-  proc funcname(dst, src: ptr UncheckedArray[float32], len: Natural) =
-
-    template srcAlign {.dirty.} = cast[ByteAddress](src[idx].addr) and (alignNeeded - 1)
-    template dstAlign {.dirty.} = cast[ByteAddress](dst[idx].addr) and (alignNeeded - 1)
-
-    doAssert srcAlign == dstAlign
-    
-    # Loop peeling, while not aligned to required alignment
-    var idx = 0
-    while srcAlign() != 0:
-      dst[idx] = wrapped_func(src[idx])
-      inc idx
-
-    # Aligned part
-    {.pragma: restrict, codegenDecl: "$# __restrict__ $#".}
-    let srca {.restrict.} = assume_aligned cast[ptr UncheckedArray[float32]](src[idx].addr)
-    let dsta {.restrict.} = assume_aligned cast[ptr UncheckedArray[float32]](dst[idx].addr)
-
-    let newLen = len - idx
-    let unroll_stop = newLen.round_down_power_of_2(unroll_factor)
-    for i in countup(0, unroll_stop - 1, unroll_factor):
-      simd(
-        arch, simdStoreA,
-        dst[i].addr,
-        wrapped_func(
-          simd(arch, simdLoadA, src[i].addr)
-        )
-      )
-
-    # Unrolling remainder
-    for i in unroll_stop ..< len:
-      dst[i] = wrapped_func(src[idx])
 
 # ###########################################
 #
@@ -457,30 +421,49 @@ proc walkASTGeneric(
           visited[ast] = memloc
           return memloc
 
-proc initParams(procDef, resultType: NimNode): tuple[ids, ptrs, simds: seq[NimNode], initStmt: NimNode] =
+proc initParams(
+       procDef,
+       resultType: NimNode
+       ): tuple[
+            ids: seq[NimNode],
+            ptrs, simds: tuple[inParams, outParams: seq[NimNode]],
+            length: NimNode,
+            initStmt: NimNode
+          ] =
   # Get the idents from proc definition. We order the same as proc def
   # Start with non-result
   # We work at simd vector level
-  result.initStmt  = newStmtList()
+  result.initStmt = newStmtList()
+  let type0 = newCall(
+    newIdentNode"type",
+    nnkBracketExpr.newTree(
+      procDef[0][3][1][0],
+      newLit 0
+    )
+  )
 
   for i in 1 ..< procDef[0][3].len: # Proc formal params
     let iddefs = procDef[0][3][i]
     for j in 0 ..< iddefs.len - 2:
       let ident = iddefs[j]
       result.ids.add ident
-      let raw_ptr = genSym(nskLet, $ident & "_raw_ptr")
-      result.ptrs.add raw_ptr
-      if j != 0:
-        let ident0 = result.ids[0]
-        result.initStmt.add quote do:
-          assert `ident0`.len == `ident`.len
-      result.initStmt.add quote do:
-        let `raw_ptr` = `ident`[0].unsafeAddr
+      let raw_ptr = newIdentNode($ident & "_raw_ptr")
+      result.ptrs.inParams.add raw_ptr
 
-      result.simds.add newIdentNode($ident & "_simd")
+      if j == 0:
+        result.length = quote do: `ident`.len
+      else:
+        let len0 = result.length
+        result.initStmt.add quote do:
+          assert `len0` == `ident`.len
+      result.initStmt.add quote do:
+        let `raw_ptr` = cast[ptr UncheckedArray[`type0`]](`ident`[0].unsafeAddr)
+      result.simds.inParams.add newIdentNode($ident & "_simd")
 
   # Now add the result idents
   # We work at simd vector level
+  let len0 = result.length
+
   if resultType.kind == nnkEmpty:
     discard
   elif resultType.kind == nnkTupleTy:
@@ -489,19 +472,218 @@ proc initParams(procDef, resultType: NimNode): tuple[ids, ptrs, simds: seq[NimNo
       for j in 0 ..< iddefs.len - 2:
         let ident = iddefs[j]
         result.ids.add ident
-        let raw_ptr = genSym(nskLet, $ident & "_raw_ptr")
-        result.ptrs.add raw_ptr
-
-        let arg0 = result.ids[0]
+        let raw_ptr = newIdentNode($ident & "_raw_ptr")
+        result.ptrs.outParams.add raw_ptr
+        
         let res = nnkDotExpr.newTree(
                     newIdentNode"result",
                     iddefs[j]
                   )
         result.initStmt.add quote do:
-          `res` = newSeq[type(`ident`[0])](`arg0`.len)
-          let `raw_ptr` = `res`[0].unsafeAddr
+          `res` = newSeq[`type0`](`len0`)
+          let `raw_ptr` = cast[ptr UncheckedArray[`type0`]](`res`[0].unsafeAddr)
   
-        result.simds.add newIdentNode($ident & "_simd")
+        result.simds.outParams.add newIdentNode($ident & "_simd")
+
+proc vectorize(
+      funcName: NimNode,
+      ptrs, simds: tuple[inParams, outParams: seq[NimNode]],
+      len: NimNode,
+      arch: SimdArch, alignNeeded, unroll_factor: int): NimNode =
+  ## Vectorizing macro
+  ## Apply a SIMD function on all elements of an array
+  ## This deals with:
+  ##   - indexing
+  ##   - unrolling
+  ##   - alignment
+  ##   - any number of parameters and result
+
+  # It does the same as the following templates
+  #
+  # template vectorize(
+  #       wrapped_func,
+  #       funcname: untyped,
+  #       arch: static SimdArch,
+  #       alignNeeded,
+  #       unroll_factor: static int) =
+  #   proc funcname(dst, src: ptr UncheckedArray[float32], len: Natural) =
+  #
+  #     template srcAlign {.dirty.} = cast[ByteAddress](src[idx].addr) and (alignNeeded - 1)
+  #     template dstAlign {.dirty.} = cast[ByteAddress](dst[idx].addr) and (alignNeeded - 1)
+  #
+  #     doAssert srcAlign == dstAlign
+  #
+  #     # Loop peeling, while not aligned to required alignment
+  #     var idx = 0
+  #     while srcAlign() != 0:
+  #       dst[idx] = wrapped_func(src[idx])
+  #       inc idx
+  #
+  #     # Aligned part
+  #     {.pragma: restrict, codegenDecl: "$# __restrict__ $#".}
+  #     let srca {.restrict.} = assume_aligned cast[ptr UncheckedArray[float32]](src[idx].addr)
+  #     let dsta {.restrict.} = assume_aligned cast[ptr UncheckedArray[float32]](dst[idx].addr)
+  #
+  #     let newLen = len - idx
+  #     let unroll_stop = newLen.round_down_power_of_2(unroll_factor)
+  #     for i in countup(0, unroll_stop - 1, unroll_factor):
+  #       simd(
+  #         arch, simdStoreA,
+  #         dst[i].addr,
+  #         wrapped_func(
+  #           simd(arch, simdLoadA, src[i].addr)
+  #         )
+  #       )
+  #
+  #     # Unrolling remainder
+  #     for i in unroll_stop ..< len:
+  #       dst[i] = wrapped_func(src[i])
+
+  template alignmentOffset(p: ptr UncheckedArray, idx): int =
+    cast[ByteAddress](p[idx].addr) and (`alignNeeded` - 1)
+
+  result = newStmtList()
+
+  block: # Alignment
+    let align0 = newCall(bindSym"alignmentOffset", ptrs.inParams[0], newLit 0)
+    for i in 1 ..< ptrs.inParams.len:
+      let align_i = newCall(bindSym"alignmentOffset", ptrs.inParams[i], newLit 0)
+      result.add quote do:
+        doAssert `align0` == `align_i`
+    for outparam in ptrs.outParams:
+      let align_i = newCall(bindSym"alignmentOffset", outparam, newLit 0)
+      result.add quote do:
+        doAssert `align0` == `align_i`
+
+  # Loop index, destination(s) and function call
+  let idx = newIdentNode("idx_")
+  let idxPeeling = newIdentNode("idxPeeling_")
+  
+  # Src params / Function call
+  var fcall = nnkCall.newTree()
+  var fcall_simd = nnkCall.newTree()
+  fcall.add funcName
+  fcall_simd.add funcName
+  for p in ptrs.inParams:
+    let elem = nnkBracketExpr.newTree(p, idx)
+    fcall.add elem
+    fcall_simd.add newCall(
+      SimdTable[arch][simdLoadA],
+      elem
+      )
+
+  # Destination params
+  # Assuming we have a function called the following way
+  # (r0, r1) = foo(s0, s1)
+  # We can use tuples for the non-SIMD part
+  # but we will need temporaries for the SIMD part
+  # before calling simdStore
+  var dst: NimNode
+  var dst_simd_tmp: NimNode
+  var dst_init = nnkVarSection.newTree(
+    nnkIdentDefs.newTree()
+  )
+  var dst_assign = newStmtList()
+
+  if ptrs.outParams.len > 1:
+    dst = nnkPar.newTree()
+    dst_simd_tmp = nnkPar.newTree()
+    for p in ptrs.outParams:
+      let elem = nnkBracketExpr.newTree(p, idx)
+      let tmp = newIdentNode($p & "_simd")
+      dst.add elem
+      dst_simd_tmp.add tmp
+      dst_init[0].add nnkPragmaExpr.newTree(
+        tmp,
+        nnkPragma.newTree(
+          newIdentNode"noInit"
+          )
+      )
+      dst_assign.add newCall(
+        SimdTable[arch][simdStoreA],
+        elem,
+        tmp
+      )
+  elif ptrs.outParams.len == 1:
+    let elem = nnkBracketExpr.newTree(ptrs.outParams[0], idx)
+    dst = elem
+    let tmp = newIdentNode($ptrs.outParams[0] & "_simd")
+    dst_simd_tmp.add tmp
+    dst_assign.add newCall(
+      SimdTable[arch][simdStoreA],
+      elem,
+      tmp
+    )
+  dst_init[0].add SimdTable[arch][simdType]
+  dst_init[0].add newEmptyNode()
+
+  # Scalar function call
+  let scalarCall = block:
+    if ptrs.outParams.len > 0:
+      newAssignment(dst, fcall)
+    else:
+      fcall
+
+  block: # Loop peeling
+    result.add newVarStmt(idxPeeling, newLit 0)
+    let whileTest = nnkInfix.newTree(
+      newIdentNode"!=",
+      newCall(bindSym"alignmentOffset", ptrs.inParams[0], idxPeeling),
+      newLit 0
+    )
+    var whileBody = newStmtList()
+
+    whileBody.add newLetStmt(idx, idxPeeling)
+    whileBody.add scalarCall  
+    whileBody.add newCall(newIdentNode"inc", idx)
+
+    result.add nnkWhileStmt.newTree(
+      whileTest,
+      whileBody
+    )
+  
+  let unroll_stop = newIdentNode("unroll_stop_")
+  block: # Aligned part
+    result.add quote do:
+      let `unroll_stop` = round_down_power_of_2(
+        `len` - `idxPeeling`, `unroll_factor`)
+
+    if ptrs.outParams.len > 0:
+      result.add dst_init
+    
+    var forStmt = nnkForStmt.newTree()
+    forStmt.add idx
+    forStmt.add newCall(
+      newIdentNode"countup",
+      idxPeeling,
+      nnkInfix.newTree(
+        newIdentNode"-",
+        unroll_stop,
+        newLit 1
+      ),
+      newLit unroll_factor
+    )
+    if ptrs.outParams.len > 0:
+      forStmt.add nnkStmtList.newTree(
+        newAssignment(dst_simd_tmp, fcall_simd),
+        dst_assign
+      )
+    else:
+      forStmt.add fcall_simd  
+    result.add forStmt
+
+  block: # Remainder
+    var forStmt = nnkForStmt.newTree()
+    forStmt.add idx
+    forStmt.add nnkInfix.newTree(
+        newIdentNode"..<",
+        unroll_stop,
+        len
+      )
+    forStmt.add scalarCall
+    result.add forStmt
+
+  # echo result.toStrLit
 
 macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyped): untyped =
   # Note: io must be an array - https://github.com/nim-lang/Nim/issues/10691
@@ -546,11 +728,10 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
   procDef[0][6].expectKind(nnkEmpty)
 
   let resultTy = procDef[0][3][0]
-  let (ids, ptrs, simds, initParams) = initParams(procDef, resultTy)
+  let (ids, ptrs, simds, length, initParams) = initParams(procDef, resultTy)
 
-  echo initParams.toStrLit()
+  # echo initParams.toStrLit()
   
-
   # We create the inner proc, specialized to a SIMD architecture
   # In the inner proc we shadow the original idents ids.
 
@@ -596,13 +777,39 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
     newIdentNode"seq", newIdentNode"T"
   )
   var simdProc =  if arch == Sse:
-                    procDef.replaceType(seqT, newIdentNode"m128")
+                    procDef[0].replaceType(seqT, newIdentNode"m128")
                   else:
-                    procDef.replaceType(seqT, newIdentNode"m256")
+                    procDef[0].replaceType(seqT, newIdentNode"m256")
 
 
-  simdProc[0][6] = simdBody   # Assign to proc body
-  echo simdProc.toStrLit
+  simdProc[6] = simdBody   # Assign to proc body
+  # echo simdProc.toStrLit
+
+  # We vectorize the inner proc to apply to an contiguous array
+  var vecBody: NimNode
+  if arch == Sse:
+    vecBody = vectorize(
+        procDef[0][0],
+        ptrs, simds,
+        length,
+        arch, 8, 4
+      )
+  else:
+    vecBody = vectorize(
+        procDef[0][0],
+        ptrs, simds,
+        length,
+        arch, 16, 8
+      )
+
+  result = procDef.copyNimTree()
+  let resBody = newStmtList()
+  resBody.add initParams
+  resBody.add simdProc
+  resBody.add vecBody
+  result[0][6] = resBody
+
+  echo result.toStrLit
 
 # ###########################
 #
@@ -629,7 +836,15 @@ static:
 compile(Sse, [a, b, c, bar, baz, buzz]):
   proc foobar[T](a, b, c: seq[T]): tuple[bar, baz, buzz: seq[T]]
 
-let (pim, pam, poum) = foobar(1, 2, 3)
+import sequtils
+
+let
+  len = 10
+  u = newSeqWith(len, 1'f32)
+  v = newSeqWith(len, 2'f32)
+  w = newSeqWith(len, 3'f32)
+
+let (pim, pam, poum) = foobar(u, v, w)
 
 echo pim # 12
 echo pam # 20
