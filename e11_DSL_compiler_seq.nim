@@ -342,20 +342,19 @@ proc replaceType*(ast: NimNode, to_replace: NimNode, replacements: NimNode): Nim
 
 proc walkASTGeneric(
     ast: AstNode,
-    arch: SimdArch,
     params: seq[NimNode],
     visited: var Table[AstNode, NimNode],
     stmts: var NimNode): NimNode =
   ## Recursively walk the AST
-  ## Append the corresponding Nim AST for Generic CPU
+  ## Append the corresponding Nim AST for generic instructions
   ## and returns a LVal, Output or expression
   case ast.kind:
     of Input:
       return params[ast.symId]
     of IntScalar:
-      return newCall(SimdTable[arch][simdBroadcast], newLit(ast.intVal))
+      return newLit(ast.intVal)
     of FloatScalar:
-      return newCall(SimdTable[arch][simdBroadcast], newLit(ast.floatVal))
+      return newLit(ast.floatVal)
     of Output, LVal:
       let sym = newIdentNode(ast.symLVal)
       if ast in visited:
@@ -366,7 +365,7 @@ proc walkASTGeneric(
       else:
         visited[ast] = sym
         var blck = newStmtList()
-        let expression = walkASTGeneric(ast.prev_version, arch, params, visited, blck)
+        let expression = walkASTGeneric(ast.prev_version, params, visited, blck)
         stmts.add blck
         if not(expression.kind == nnkIdent and eqIdent(sym, expression)):
           stmts.add newAssignment(
@@ -387,7 +386,7 @@ proc walkASTGeneric(
               ast.rhs notin visited:
             varAssign = true
           var lhsStmt = newStmtList()
-          lhs = walkASTGeneric(ast.lhs, arch, params, visited, lhsStmt)
+          lhs = walkASTGeneric(ast.lhs, params, visited, lhsStmt)
           stmts.add lhsStmt
         else:
           lhs = visited[ast.lhs]
@@ -395,9 +394,90 @@ proc walkASTGeneric(
         var rhs: NimNode
         if ast.rhs notin visited:
           var rhsStmt = newStmtList()
-          rhs = walkASTGeneric(ast.rhs, arch, params, visited, rhsStmt)
+          rhs = walkASTGeneric(ast.rhs, params, visited, rhsStmt)
           stmts.add rhsStmt
-          # visited[ast.rhs] = rhs # Done in walkAST
+          # visited[ast.rhs] = rhs # # Done in previous walkASTGeneric call
+        else:
+          rhs = visited[ast.rhs]
+
+        if ast.kind == Assign:
+          lhs.expectKind(nnkIdent)
+          if varAssign:
+            stmts.add newVarStmt(lhs, rhs)
+          else:
+            stmts.add newAssignment(lhs, rhs)
+          return lhs
+        else:
+          var callStmt = nnkCall.newTree()
+          case ast.kind
+          of Add: callStmt.add newidentNode"+"
+          of Mul: callStmt.add newidentNode"*"
+          else: raise newException(ValueError, "Unreachable code")
+          callStmt.add lhs
+          callStmt.add rhs
+          let memloc = genSym(nskLet, "memloc_")
+          stmts.add newLetStmt(memloc, callStmt)
+          visited[ast] = memloc
+          return memloc
+
+proc walkASTSimd(
+    ast: AstNode,
+    arch: SimdArch,
+    params: seq[NimNode],
+    visited: var Table[AstNode, NimNode],
+    stmts: var NimNode): NimNode =
+  ## Recursively walk the AST
+  ## Append the corresponding Nim AST for SIMD specialized instructions
+  ## and returns a LVal, Output or expression
+  case ast.kind:
+    of Input:
+      return params[ast.symId]
+    of IntScalar:
+      return newCall(SimdTable[arch][simdBroadcast], newLit(ast.intVal))
+    of FloatScalar:
+      return newCall(SimdTable[arch][simdBroadcast], newLit(ast.floatVal))
+    of Output, LVal:
+      let sym = newIdentNode(ast.symLVal)
+      if ast in visited:
+        return sym
+      elif ast.prev_version.isNil:
+        visited[ast] = sym
+        return sym
+      else:
+        visited[ast] = sym
+        var blck = newStmtList()
+        let expression = walkASTSimd(ast.prev_version, arch, params, visited, blck)
+        stmts.add blck
+        if not(expression.kind == nnkIdent and eqIdent(sym, expression)):
+          stmts.add newAssignment(
+            newIdentNode(ast.symLVal),
+            expression
+          )
+        return newIdentNode(ast.symLVal)
+    of Assign, Add, Mul:
+      if ast in visited:
+        return # nil
+      else:
+        var varAssign = false
+
+        var lhs: NimNode
+        if ast.lhs notin visited:
+          if ast.lhs.kind == LVal and
+              ast.lhs.prev_version.isNil and
+              ast.rhs notin visited:
+            varAssign = true
+          var lhsStmt = newStmtList()
+          lhs = walkASTSimd(ast.lhs, arch, params, visited, lhsStmt)
+          stmts.add lhsStmt
+        else:
+          lhs = visited[ast.lhs]
+
+        var rhs: NimNode
+        if ast.rhs notin visited:
+          var rhsStmt = newStmtList()
+          rhs = walkASTSimd(ast.rhs, arch, params, visited, rhsStmt)
+          stmts.add rhsStmt
+          # visited[ast.rhs] = rhs # Done in previous walkASTSimd call
         else:
           rhs = visited[ast.rhs]
 
@@ -539,19 +619,20 @@ proc vectorize(
   #     for i in unroll_stop ..< len:
   #       dst[i] = wrapped_func(src[i])
 
-  template alignmentOffset(p: ptr UncheckedArray, idx): int =
-    cast[ByteAddress](p[idx].addr) and (`alignNeeded` - 1)
+  template alignmentOffset(p: NimNode, idx: NimNode): untyped {.dirty.}=
+    quote:
+      cast[ByteAddress](`p`[`idx`].addr) and (`alignNeeded` - 1)
 
   result = newStmtList()
 
   block: # Alignment
-    let align0 = newCall(bindSym"alignmentOffset", ptrs.inParams[0], newLit 0)
+    let align0 = alignmentOffset(ptrs.inParams[0], newLit 0)
     for i in 1 ..< ptrs.inParams.len:
-      let align_i = newCall(bindSym"alignmentOffset", ptrs.inParams[i], newLit 0)
+      let align_i = alignmentOffset(ptrs.inParams[i], newLit 0)
       result.add quote do:
         doAssert `align0` == `align_i`
     for outparam in ptrs.outParams:
-      let align_i = newCall(bindSym"alignmentOffset", outparam, newLit 0)
+      let align_i =  alignmentOffset(outparam, newLit 0)
       result.add quote do:
         doAssert `align0` == `align_i`
 
@@ -569,8 +650,11 @@ proc vectorize(
     fcall.add elem
     fcall_simd.add newCall(
       SimdTable[arch][simdLoadA],
-      elem
+      newCall(
+        newidentNode"addr",
+        elem
       )
+    )
 
   # Destination params
   # Assuming we have a function called the following way
@@ -601,7 +685,10 @@ proc vectorize(
       )
       dst_assign.add newCall(
         SimdTable[arch][simdStoreA],
-        elem,
+        newCall(
+          newidentNode"addr",
+          elem
+        ),
         tmp
       )
   elif ptrs.outParams.len == 1:
@@ -628,14 +715,14 @@ proc vectorize(
     result.add newVarStmt(idxPeeling, newLit 0)
     let whileTest = nnkInfix.newTree(
       newIdentNode"!=",
-      newCall(bindSym"alignmentOffset", ptrs.inParams[0], idxPeeling),
+      alignmentOffset(ptrs.inParams[0], idxPeeling),
       newLit 0
     )
     var whileBody = newStmtList()
 
     whileBody.add newLetStmt(idx, idxPeeling)
     whileBody.add scalarCall  
-    whileBody.add newCall(newIdentNode"inc", idx)
+    whileBody.add newCall(newIdentNode"inc", idxPeeling)
 
     result.add nnkWhileStmt.newTree(
       whileTest,
@@ -685,6 +772,58 @@ proc vectorize(
 
   # echo result.toStrLit
 
+proc innerProcGen(
+    genSimd: bool, arch: SimdArch,
+    io: varargs[AstNode],
+    ids: seq[NimNode],
+    resultType: NimNode,
+    ): NimNode =
+  # Does topological ordering and dead-code elimination
+  result = newStmtList()
+  var visitedNodes = initTable[AstNode, NimNode]()
+
+  for i, inOutVar in io:
+    if inOutVar.kind != Input:
+      if inOutVar.kind in {Output, LVal}:
+        let sym = block:
+          if genSimd:
+            walkASTSimd(inOutVar, arch, ids, visitedNodes, result)
+          else:
+            walkASTGeneric(inOutVar, ids, visitedNodes, result)
+        sym.expectKind nnkIdent
+        if resultType.kind == nnkTupleTy:
+          result.add newAssignment(
+            nnkDotExpr.newTree(
+              newIdentNode"result",
+              ids[i]
+            ),
+            sym
+          )
+        else:
+          result.add newAssignment(
+            newIdentNode"result",
+            sym
+          )
+      else:
+        let expression =  block:
+          if genSimd:
+            walkASTSimd(inOutVar, arch, ids, visitedNodes, result)
+          else:
+            walkASTGeneric(inOutVar, ids, visitedNodes, result)
+        if resultType.kind == nnkTupleTy:
+          result.add newAssignment(
+            nnkDotExpr.newTree(
+              newIdentNode"result",
+              ids[i]
+            ),
+            expression
+          )
+        else:
+          result.add newAssignment(
+            newIdentNode"result",
+            expression
+          )
+
 macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyped): untyped =
   # Note: io must be an array - https://github.com/nim-lang/Nim/issues/10691
 
@@ -731,50 +870,21 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
   let (ids, ptrs, simds, length, initParams) = initParams(procDef, resultTy)
 
   # echo initParams.toStrLit()
+
+
   
-  # We create the inner proc, specialized to a SIMD architecture
+  # We create the inner SIMD proc, specialized to a SIMD architecture
   # In the inner proc we shadow the original idents ids.
-
-  # Topological ordering, dead-code elimination
-  var simdBody = newStmtList()
-  var visitedNodes = initTable[AstNode, NimNode]()
-
-  for i, inOutVar in io:
-    if inOutVar.kind != Input:
-      if inOutVar.kind in {Output, LVal}:
-        let sym = walkASTGeneric(inOutVar, arch, ids, visitedNodes, simdBody)
-        sym.expectKind nnkIdent
-        if resultTy.kind == nnkTupleTy:
-          simdBody.add newAssignment(
-            nnkDotExpr.newTree(
-              newIdentNode"result",
-              ids[i]
-            ),
-            sym
-          )
-        else:
-          simdBody.add newAssignment(
-            newIdentNode"result",
-            sym
-          )
-      else:
-        let expression = walkASTGeneric(inOutVar, arch, ids, visitedNodes, simdBody)
-        if resultTy.kind == nnkTupleTy:
-          simdBody.add newAssignment(
-            nnkDotExpr.newTree(
-              newIdentNode"result",
-              ids[i]
-            ),
-            expression
-          )
-        else:
-          simdBody.add newAssignment(
-            newIdentNode"result",
-            expression
-          )
+  let simdBody = innerProcGen(
+    genSimd = true,
+    arch = arch,
+    io = io,
+    ids = ids,
+    resultType = resultTy
+  )
 
   let seqT = nnkBracketExpr.newTree(
-    newIdentNode"seq", newIdentNode"T"
+    newIdentNode"seq", newIdentNode"float32"
   )
   var simdProc =  if arch == Sse:
                     procDef[0].replaceType(seqT, newIdentNode"m128")
@@ -784,6 +894,18 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
 
   simdProc[6] = simdBody   # Assign to proc body
   # echo simdProc.toStrLit
+
+  # We create the inner generic proc
+  let genericBody = innerProcGen(
+    genSimd = false,
+    arch = arch,
+    io = io,
+    ids = ids,
+    resultType = resultTy
+  )
+
+  var genericProc = procDef[0].replaceType(seqT, newIdentNode"float32")
+  genericProc[6] = genericBody   # Assign to proc body
 
   # We vectorize the inner proc to apply to an contiguous array
   var vecBody: NimNode
@@ -805,6 +927,7 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
   result = procDef.copyNimTree()
   let resBody = newStmtList()
   resBody.add initParams
+  resBody.add genericProc
   resBody.add simdProc
   resBody.add vecBody
   result[0][6] = resBody
@@ -834,7 +957,7 @@ static:
   buzz += b
 
 compile(Sse, [a, b, c, bar, baz, buzz]):
-  proc foobar[T](a, b, c: seq[T]): tuple[bar, baz, buzz: seq[T]]
+  proc foobar(a, b, c: seq[float32]): tuple[bar, baz, buzz: seq[float32]]
 
 import sequtils
 
