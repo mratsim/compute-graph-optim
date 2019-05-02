@@ -117,6 +117,7 @@ Halide has been expanded with autodiff capabilities in [gradient-halide](https:/
 - OpenAI Dali (can't find the repo): http://learningsys.org/nips18/assets/papers/100CameraReadySubmissionDali__Lazy_Compilation_of_Dynamic_Computation_Graphs.pdf
 - DLMC TVM: https://github.com/dmlc/tvm
 - Intel PlaidML: https://github.com/plaidml/plaidml
+- Intel Nervana Ngraph: https://github.com/NervanaSystems/ngraph/tree/master/python
 - The Tensor Algebra Compiler: https://github.com/tensor-compiler/taco
 - Numba: http://numba.pydata.org (less related as it doesn't compile Expression Graphs)
 - PyGPU (2006): An embedded DSL for high speed image processing
