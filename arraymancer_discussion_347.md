@@ -136,6 +136,14 @@ Machine Learning](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.220.1
 - DLVM Deep Learning Virtual Machine (2017 - Authors migrated to Swift for Tensorflow)
   - https://arxiv.org/pdf/1711.03016.pdf
   - https://github.com/dlvm-team/dlvm-core
+- TriNNity:
+  - https://www.scss.tcd.ie/~andersan/projects/live/triNNity.html
+  - https://bitbucket.org/STG-TCD/trinnity/src/master/
+- Graphi, scheduling deep learning computation graphs on manycore CPU:
+  - https://arxiv.org/abs/1807.09667
+- CGT: Computational Graph Toolkit (computation graph and autodiff on multidimensional arrays algorithm, with C and Python API):
+  - https://github.com/joschu/cgt/
+  - http://rll.berkeley.edu/cgt/
 
 ### Approaches to porting
 
