@@ -651,7 +651,7 @@ proc vectorize(
         result.fcall.add elem
       else:
         result.fcall.add newCall(
-          SimdTable[arch][simdLoadA],
+          SimdTable[arch][simdLoadU], # Hack: should be aligned but no control over alignment in seq[T]
           newCall(
             newidentNode"addr",
             elem
@@ -687,7 +687,7 @@ proc vectorize(
               )
           )
           result.dst_assign.add newCall(
-            SimdTable[arch][simdStoreU], # TODO Alignment issue
+            SimdTable[arch][simdStoreU], # Hack: should be aligned but no control over alignment in seq[T]
             newCall(
               newidentNode"addr",
               elem
@@ -702,7 +702,7 @@ proc vectorize(
         let tmp = newIdentNode($ptrs.outParams[0] & "_simd")
         result.dst = tmp
         result.dst_assign.add newCall(
-          SimdTable[arch][simdStoreU], # TODO Alignment issue
+          SimdTable[arch][simdStoreU], # Hack: should be aligned but no control over alignment in seq[T]
           elem,
           tmp
         )
@@ -927,14 +927,14 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
         procDef[0][0],
         ptrs, simds,
         length,
-        arch, 8, 4
+        arch, 4, 4    # We require 4 alignment as a hack to keep seq[T] and use unaligned load/store in code
       )
   else:
     vecBody = vectorize(
         procDef[0][0],
         ptrs, simds,
         length,
-        arch, 16, 8
+        arch, 4, 8    # We require 4 alignment as a hack to keep seq[T] and use unaligned load/store in code
       )
 
   result = procDef.copyNimTree()
@@ -971,6 +971,12 @@ static:
 
 compile(Sse, [a, b, c, bar, baz, buzz]):
   proc foobar(a, b, c: seq[float32]): tuple[bar, baz, buzz: seq[float32]]
+
+# Note to use aligned store, SSE requires 16-byte alignment and AVX 32-byte alignment
+# Unfortunately there is no way with normal seq to specify that (pending destructors)
+# As a hack, we use the unaligned load and store simd, and a required alignment of 4,
+# in practice we define our own tensor type
+# with aligned allocator
 
 import sequtils
 
