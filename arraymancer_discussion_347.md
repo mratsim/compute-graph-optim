@@ -111,6 +111,7 @@ Halide has been expanded with autodiff capabilities in [gradient-halide](https:/
 ### Related projects
 
 - Tensorflow XLA: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/compiler/xla/g3doc/overview.md
+- Tensorflow MLIR: Tensorflow MLIR: https://github.com/tensorflow/mlir
 - PyTorch Glow: https://github.com/pytorch/glow
 - Dask: https://dask.org
 - Gradient Halide: https://people.csail.mit.edu/tzumao/gradient_halide/
