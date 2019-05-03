@@ -104,6 +104,17 @@ Note that OpenAI Dali (not to be confused with Nvidia DALI) apparently is a comp
 
 2.  Another disadvantage is the LLVM dependency at runtime, but that only concerns JIT. LLVM is a huge library.
 
+### Halide papers
+
+- Jonathan Ragan-Kelley thesis: https://people.csail.mit.edu/jrk/jrkthesis.pdf
+- Halide a language and compiler for optimising, parallelism, locality and recomputation
+  in image processing pipelines: http://people.csail.mit.edu/jrk/halide-pldi13.pdf
+- Compiling high performance recursive filters: http://www-sop.inria.fr/reves/Basilic/2015/CRPDD15a/recfilter.pdf
+- CVPR slides - recursive filtering: https://halide-lang.org/assets/lectures/CVPR_Halide_RecursiveFiltering.pdf
+- Parallel Associative Reduction in Halide: https://andrew.adams.pub/par.pdf
+
+
+
 ### Beyond Halide
 
 Halide has been expanded with autodiff capabilities in [gradient-halide](https://people.csail.mit.edu/tzumao/gradient_halide/) which may greatly enhance autograd which is a recurrent source of slowness in Arraymancer due to the need of a DAG which doesn't play well with reference counting. However while gradient-halide results are promising, TVM (a fork of Halide for DL) [reported perf issues](https://discuss.tvm.ai/t/automatic-differentiation-on-the-level-of-tvm-ir/781)
@@ -111,7 +122,7 @@ Halide has been expanded with autodiff capabilities in [gradient-halide](https:/
 ### Related projects
 
 - Tensorflow XLA: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/compiler/xla/g3doc/overview.md
-- Tensorflow MLIR: Tensorflow MLIR: https://github.com/tensorflow/mlir
+- Tensorflow MLIR: https://github.com/tensorflow/mlir
 - PyTorch Glow: https://github.com/pytorch/glow
 - Dask: https://dask.org
 - Gradient Halide: https://people.csail.mit.edu/tzumao/gradient_halide/
@@ -144,6 +155,33 @@ Machine Learning](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.220.1
 - CGT: Computational Graph Toolkit (computation graph and autodiff on multidimensional arrays algorithm, with C and Python API):
   - https://github.com/joschu/cgt/
   - http://rll.berkeley.edu/cgt/
+- PolyMage: Automatic Optimization for image processing pipelines:
+  - Note:
+    - Polymage use a Python DSL that compiles to C++, including OpenMP and ivdep pragma
+    - It uses polyhedral optimization with several tiling algorithms (notable parallelogram and overlapped)
+    - Author later refactored Halide auto-scheduler
+  - http://mcl.csa.iisc.ac.in/polymage/asplos235-mullapudi.pdf
+  - http://mcl.csa.iisc.ernet.in/downloads/slides/PolyMage.pdf
+  - http://mcl.csa.iisc.ac.in/polymage.html
+  - https://bitbucket.org/udayb/polymage/
+- SMIL / FREIA: A Dynamic to Static DSL Compiler for Image
+Processing Applications
+  - https://www.cri.ensmp.fr/classement/doc/E-398-slides.pdf
+  - https://www.cri.mines-paristech.fr/classement/doc/A-640.pdf
+  - https://www.cri.mines-paristech.fr/classement/doc/A-670.pdf
+
+### Auto-scheduling - Polyhedral tiling
+
+- The Promises of Hybrid
+Hexagonal/Classical
+Tiling for GPU: https://hal.inria.fr/hal-00848691/document
+- Applying the Polyhedral Model to Tile Loops
+in Devito: https://pdfs.semanticscholar.org/d0bd/7c5f51c80c3236e99009298734291745e2e7.pdf
+- Jie Zhao:
+  - A Combined Language and Polyhedral Approach for
+Heterogeneous Parallelism: https://tel.archives-ouvertes.fr/tel-01988073/file/thesis.pdf
+  - A General Purpose Automatic Overlapped Tiling
+Technique in Polyhedral Frameworks: https://www.di.ens.fr/~zhaojie/cgo2018-poster-presentation
 
 ### Approaches to porting
 
