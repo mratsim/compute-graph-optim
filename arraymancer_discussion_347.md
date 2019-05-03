@@ -112,7 +112,7 @@ Note that OpenAI Dali (not to be confused with Nvidia DALI) apparently is a comp
 - Compiling high performance recursive filters: http://www-sop.inria.fr/reves/Basilic/2015/CRPDD15a/recfilter.pdf
 - CVPR slides - recursive filtering: https://halide-lang.org/assets/lectures/CVPR_Halide_RecursiveFiltering.pdf
 - Parallel Associative Reduction in Halide: https://andrew.adams.pub/par.pdf
-
+- Automatically Scheduling Halide Image Processing Pipelines: http://graphics.cs.cmu.edu/projects/halidesched/mullapudi16_halidesched.pdf
 
 
 ### Beyond Halide
@@ -169,6 +169,10 @@ Processing Applications
   - https://www.cri.ensmp.fr/classement/doc/E-398-slides.pdf
   - https://www.cri.mines-paristech.fr/classement/doc/A-640.pdf
   - https://www.cri.mines-paristech.fr/classement/doc/A-670.pdf
+- DeepDSL (Scala): A Compilation-based Domain-Specific Language for Deep Learning
+  - https://github.com/deepdsl/deepdsl
+  - https://openreview.net/pdf?id=Bks8cPcxe
+    
 
 ### Auto-scheduling - Polyhedral tiling
 
@@ -182,6 +186,12 @@ in Devito: https://pdfs.semanticscholar.org/d0bd/7c5f51c80c3236e9900929873429174
 Heterogeneous Parallelism: https://tel.archives-ouvertes.fr/tel-01988073/file/thesis.pdf
   - A General Purpose Automatic Overlapped Tiling
 Technique in Polyhedral Frameworks: https://www.di.ens.fr/~zhaojie/cgo2018-poster-presentation
+- Tiramisu: TIRAMISU: A Polyhedral Compiler for Expressing. Fast and Portable Code.
+  - Note: supports RNN
+  - https://arxiv.org/pdf/1804.10694.pdf
+  - https://andreask.cs.illinois.edu/cs598apk-f18/talks/njchris2.pdf
+  - http://tiramisu-compiler.org
+  - https://github.com/Tiramisu-Compiler/tiramisu
 
 ### Approaches to porting
 
