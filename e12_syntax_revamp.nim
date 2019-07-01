@@ -1017,7 +1017,7 @@ macro generate(ast_routine: typed, signature: untyped): untyped =
     )
 
   # Call the AST routine
-  let call = newCall(ast, inputs)
+  let call = newCall("static", newCall(ast, inputs))
   var callAssign: NimNode
   case sig[0].kind
   of nnkEmpty: # Case 1: no result
@@ -1050,10 +1050,15 @@ macro generate(ast_routine: typed, signature: untyped): untyped =
       io.add callAssign[idx]
   else:
     io.add callAssign
-  let io_array = quote do: `io`
+  # let io_array = quote do: `io`
   # result.add getAst(
   #   compile(Sse, io_array, signature)
   # )
+
+  result = newBlockStmt(
+    genSym(nskLabel, "generated_" & $ast_routine & "_"),
+    result
+  )
 
   echo result.toStrlit
 # ###########################
