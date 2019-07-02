@@ -274,7 +274,7 @@ import strutils
 
 proc `$`(ast: AstNode): string =
   proc inspect(ast: AstNode, indent: int): string =
-    result.add '\n' & repeat(' ', indent) & $ast.kind
+    result.add '\n' & repeat(' ', indent) & $ast.kind & " (id: " & $hash(ast) & ')'
     let indent = indent + 2
     case ast.kind
     of Input:
@@ -360,52 +360,71 @@ proc walkASTGeneric(
             expression
           )
         return newIdentNode(ast.symLVal)
-    of Assign, Add, Mul:
+    of Assign:
       if ast in visited:
-        return # nil
+        return visited[ast]
+
+      echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
+      var varAssign = false
+
+      if ast.lhs notin visited and
+            ast.lhs.kind == LVal and
+            ast.lhs.prev_version.isNil and
+            ast.rhs notin visited:
+          varAssign = true
+
+      var lhsStmt = newStmtList()
+      let lhs = walkASTGeneric(ast.lhs, params, visited, lhsStmt)
+      stmts.add lhsStmt
+
+      var rhsStmt = newStmtList()
+      let rhs = walkASTGeneric(ast.rhs, params, visited, rhsStmt)
+      stmts.add rhsStmt
+
+      lhs.expectKind(nnkIdent)
+      if varAssign:
+        stmts.add newVarStmt(lhs, rhs)
       else:
-        var varAssign = false
+        stmts.add newAssignment(lhs, rhs)
+      visited[ast] = lhs
+      return lhs
 
-        var lhs: NimNode
-        if ast.lhs notin visited:
-          if ast.lhs.kind == LVal and
-              ast.lhs.prev_version.isNil and
-              ast.rhs notin visited:
-            varAssign = true
-          var lhsStmt = newStmtList()
-          lhs = walkASTGeneric(ast.lhs, params, visited, lhsStmt)
-          stmts.add lhsStmt
-        else:
-          lhs = visited[ast.lhs]
+    of Add, Mul:
+      if ast in visited:
+        return visited[ast]
 
-        var rhs: NimNode
-        if ast.rhs notin visited:
-          var rhsStmt = newStmtList()
-          rhs = walkASTGeneric(ast.rhs, params, visited, rhsStmt)
-          stmts.add rhsStmt
-          # visited[ast.rhs] = rhs # # Done in previous walkASTGeneric call
-        else:
-          rhs = visited[ast.rhs]
+      if hash(ast) == 6289576662490420451 and visited.len > 3:
+        echo "#####   Visited Nodes list  #####"
+        for key in visited.keys():
+          echo hash(key), " - match: ", hash(key) == hash(ast)
+        echo "Hash: ", hash(ast)
+        echo "visited: ", visited.hasKey(ast)
+        raise newException(ValueError, "STOP")
 
-        if ast.kind == Assign:
-          lhs.expectKind(nnkIdent)
-          if varAssign:
-            stmts.add newVarStmt(lhs, rhs)
-          else:
-            stmts.add newAssignment(lhs, rhs)
-          return lhs
-        else:
-          var callStmt = nnkCall.newTree()
-          case ast.kind
-          of Add: callStmt.add newidentNode"+"
-          of Mul: callStmt.add newidentNode"*"
-          else: raise newException(ValueError, "Unreachable code")
-          callStmt.add lhs
-          callStmt.add rhs
-          let memloc = genSym(nskLet, "memloc_")
-          stmts.add newLetStmt(memloc, callStmt)
-          visited[ast] = memloc
-          return memloc
+      echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
+
+      var callStmt = nnkCall.newTree()
+      var lhsStmt = newStmtList()
+      var rhsStmt = newStmtList()
+
+      let lhs = walkASTGeneric(ast.lhs, params, visited, lhsStmt)
+      let rhs = walkASTGeneric(ast.rhs, params, visited, rhsStmt)
+
+      stmts.add lhsStmt
+      stmts.add rhsStmt
+
+      case ast.kind
+      of Add: callStmt.add newidentNode"+"
+      of Mul: callStmt.add newidentNode"*"
+      else: raise newException(ValueError, "Unreachable code")
+
+      callStmt.add lhs
+      callStmt.add rhs
+
+      let memloc = genSym(nskLet, "memloc_")
+      stmts.add newLetStmt(memloc, callStmt)
+      visited[ast] = memloc
+      return memloc
 
 proc walkASTSimd(
     ast: AstNode,
@@ -871,29 +890,34 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
 
   # echo initParams.toStrLit()
 
+  echo "######## result.bar"
+  echo io[3]
 
-
-  # We create the inner SIMD proc, specialized to a SIMD architecture
-  # In the inner proc we shadow the original idents ids.
-  let simdBody = innerProcGen(
-    genSimd = true,
-    arch = arch,
-    io = io,
-    ids = ids,
-    resultType = resultTy
-  )
+  echo "\n######## result.baz"
+  echo io[4]
 
   let seqT = nnkBracketExpr.newTree(
     newIdentNode"seq", newIdentNode"float32"
   )
-  var simdProc =  if arch == Sse:
-                    procDef[0].replaceType(seqT, newIdentNode"m128")
-                  else:
-                    procDef[0].replaceType(seqT, newIdentNode"m256")
+
+  # # We create the inner SIMD proc, specialized to a SIMD architecture
+  # # In the inner proc we shadow the original idents ids.
+  # let simdBody = innerProcGen(
+  #   genSimd = true,
+  #   arch = arch,
+  #   io = io,
+  #   ids = ids,
+  #   resultType = resultTy
+  # )
+
+  # var simdProc =  if arch == Sse:
+  #                   procDef[0].replaceType(seqT, newIdentNode"m128")
+  #                 else:
+  #                   procDef[0].replaceType(seqT, newIdentNode"m256")
 
 
-  simdProc[6] = simdBody   # Assign to proc body
-  # echo simdProc.toStrLit
+  # simdProc[6] = simdBody   # Assign to proc body
+  # # echo simdProc.toStrLit
 
   # We create the inner generic proc
   let genericBody = innerProcGen(
@@ -906,6 +930,7 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
 
   var genericProc = procDef[0].replaceType(seqT, newIdentNode"float32")
   genericProc[6] = genericBody   # Assign to proc body
+  echo genericProc.toStrLit
 
   # We vectorize the inner proc to apply to an contiguous array
   var vecBody: NimNode
@@ -928,7 +953,7 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
   let resBody = newStmtList()
   resBody.add initParams
   resBody.add genericProc
-  resBody.add simdProc
+  # resBody.add simdProc
   resBody.add vecBody
   result[0][6] = resBody
 
@@ -1068,24 +1093,26 @@ macro generate(ast_routine: typed, signature: untyped): untyped =
 #
 # ###########################
 
-proc foobar(a: AstNode, b, c: AstNode): tuple[bar: AstNode, baz, buzz: AstNode] =
+proc foobar(a: AstNode, b, c: AstNode): tuple[bar: AstNode, baz: AstNode] =
 
   let foo = a + b + c
-  result.bar = foo * 2
 
-  result.baz = foo * 3
-  result.buzz = result.baz
+  # Don't use in-place updates
+  # https://github.com/nim-lang/Nim/issues/11637
+  let bar = foo * 2
 
-  result.buzz += a * 10000
-  result.baz += b
-  result.buzz += b
+  var baz = foo * 3
+  baz += b
 
-proc foobar(a: int, b, c: int): tuple[bar, baz, buzz: int] =
+  result.bar = bar
+  result.baz = baz
+
+proc foobar(a: int, b, c: int): tuple[bar, baz: int] =
   echo "Overloaded proc to test bindings"
   discard
 
 generate foobar:
-  proc foobar(a: seq[float32], b, c: seq[float32]): tuple[bar: seq[float32], baz, buzz: seq[float32]]
+  proc foobar(a: seq[float32], b, c: seq[float32]): tuple[bar: seq[float32], baz: seq[float32]]
 
 # Note to use aligned store, SSE requires 16-byte alignment and AVX 32-byte alignment
 # Unfortunately there is no way with normal seq to specify that (pending destructors)
@@ -1101,8 +1128,7 @@ let
   v = newSeqWith(len, 2'f32)
   w = newSeqWith(len, 3'f32)
 
-let (pim, pam, poum) = foobar(u, v, w)
+let (pim, pam) = foobar(u, v, w)
 
 echo pim # 12
 echo pam # 20
-echo poum # 10020
