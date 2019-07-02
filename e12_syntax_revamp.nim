@@ -274,7 +274,7 @@ import strutils
 
 proc `$`(ast: AstNode): string =
   proc inspect(ast: AstNode, indent: int): string =
-    result.add '\n' & repeat(' ', indent) & $ast.kind
+    result.add '\n' & repeat(' ', indent) & $ast.kind & " (id: " & $hash(ast) & ')'
     let indent = indent + 2
     case ast.kind
     of Input:
@@ -360,52 +360,75 @@ proc walkASTGeneric(
             expression
           )
         return newIdentNode(ast.symLVal)
-    of Assign, Add, Mul:
+    of Assign:
       if ast in visited:
-        return # nil
+        return visited[ast]
+
+      # Workaround compileTime table not finding keys
+      # https://github.com/mratsim/compute-graph-optim/issues/1
+      for key in visited.keys():
+        if hash(key) == hash(ast):
+          return visited[key]
+
+      echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
+      var varAssign = false
+
+      if ast.lhs notin visited and
+            ast.lhs.kind == LVal and
+            ast.lhs.prev_version.isNil and
+            ast.rhs notin visited:
+          varAssign = true
+
+      var rhsStmt = newStmtList()
+      let rhs = walkASTGeneric(ast.rhs, params, visited, rhsStmt)
+      stmts.add rhsStmt
+
+      var lhsStmt = newStmtList()
+      let lhs = walkASTGeneric(ast.lhs, params, visited, lhsStmt)
+      stmts.add lhsStmt
+
+      lhs.expectKind(nnkIdent)
+      if varAssign:
+        stmts.add newVarStmt(lhs, rhs)
       else:
-        var varAssign = false
+        stmts.add newAssignment(lhs, rhs)
+      # visited[ast] = lhs # Already done
+      return lhs
 
-        var lhs: NimNode
-        if ast.lhs notin visited:
-          if ast.lhs.kind == LVal and
-              ast.lhs.prev_version.isNil and
-              ast.rhs notin visited:
-            varAssign = true
-          var lhsStmt = newStmtList()
-          lhs = walkASTGeneric(ast.lhs, params, visited, lhsStmt)
-          stmts.add lhsStmt
-        else:
-          lhs = visited[ast.lhs]
+    of Add, Mul:
+      if ast in visited:
+        return visited[ast]
 
-        var rhs: NimNode
-        if ast.rhs notin visited:
-          var rhsStmt = newStmtList()
-          rhs = walkASTGeneric(ast.rhs, params, visited, rhsStmt)
-          stmts.add rhsStmt
-          # visited[ast.rhs] = rhs # # Done in previous walkASTGeneric call
-        else:
-          rhs = visited[ast.rhs]
+      # Workaround compileTime table not finding keys
+      # https://github.com/mratsim/compute-graph-optim/issues/1
+      for key in visited.keys():
+        if hash(key) == hash(ast):
+          return visited[key]
 
-        if ast.kind == Assign:
-          lhs.expectKind(nnkIdent)
-          if varAssign:
-            stmts.add newVarStmt(lhs, rhs)
-          else:
-            stmts.add newAssignment(lhs, rhs)
-          return lhs
-        else:
-          var callStmt = nnkCall.newTree()
-          case ast.kind
-          of Add: callStmt.add newidentNode"+"
-          of Mul: callStmt.add newidentNode"*"
-          else: raise newException(ValueError, "Unreachable code")
-          callStmt.add lhs
-          callStmt.add rhs
-          let memloc = genSym(nskLet, "memloc_")
-          stmts.add newLetStmt(memloc, callStmt)
-          visited[ast] = memloc
-          return memloc
+      echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
+
+      var callStmt = nnkCall.newTree()
+      var lhsStmt = newStmtList()
+      var rhsStmt = newStmtList()
+
+      let lhs = walkASTGeneric(ast.lhs, params, visited, lhsStmt)
+      let rhs = walkASTGeneric(ast.rhs, params, visited, rhsStmt)
+
+      stmts.add lhsStmt
+      stmts.add rhsStmt
+
+      case ast.kind
+      of Add: callStmt.add newidentNode"+"
+      of Mul: callStmt.add newidentNode"*"
+      else: raise newException(ValueError, "Unreachable code")
+
+      callStmt.add lhs
+      callStmt.add rhs
+
+      let memloc = genSym(nskLet, "memloc_")
+      stmts.add newLetStmt(memloc, callStmt)
+      visited[ast] = memloc
+      return memloc
 
 proc walkASTSimd(
     ast: AstNode,
@@ -441,52 +464,75 @@ proc walkASTSimd(
             expression
           )
         return newIdentNode(ast.symLVal)
-    of Assign, Add, Mul:
+    of Assign:
       if ast in visited:
-        return # nil
+        return visited[ast]
+
+      # Workaround compileTime table not finding keys
+      # https://github.com/mratsim/compute-graph-optim/issues/1
+      for key in visited.keys():
+        if hash(key) == hash(ast):
+          return visited[key]
+
+      echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
+      var varAssign = false
+
+      if ast.lhs notin visited and
+            ast.lhs.kind == LVal and
+            ast.lhs.prev_version.isNil and
+            ast.rhs notin visited:
+          varAssign = true
+
+      var rhsStmt = newStmtList()
+      let rhs = walkASTSimd(ast.rhs, arch, params, visited, rhsStmt)
+      stmts.add rhsStmt
+
+      var lhsStmt = newStmtList()
+      let lhs = walkASTSimd(ast.lhs, arch, params, visited, lhsStmt)
+      stmts.add lhsStmt
+
+      lhs.expectKind(nnkIdent)
+      if varAssign:
+        stmts.add newVarStmt(lhs, rhs)
       else:
-        var varAssign = false
+        stmts.add newAssignment(lhs, rhs)
+      # visited[ast] = lhs # Already done
+      return lhs
 
-        var lhs: NimNode
-        if ast.lhs notin visited:
-          if ast.lhs.kind == LVal and
-              ast.lhs.prev_version.isNil and
-              ast.rhs notin visited:
-            varAssign = true
-          var lhsStmt = newStmtList()
-          lhs = walkASTSimd(ast.lhs, arch, params, visited, lhsStmt)
-          stmts.add lhsStmt
-        else:
-          lhs = visited[ast.lhs]
+    of Add, Mul:
+      if ast in visited:
+        return visited[ast]
 
-        var rhs: NimNode
-        if ast.rhs notin visited:
-          var rhsStmt = newStmtList()
-          rhs = walkASTSimd(ast.rhs, arch, params, visited, rhsStmt)
-          stmts.add rhsStmt
-          # visited[ast.rhs] = rhs # Done in previous walkASTSimd call
-        else:
-          rhs = visited[ast.rhs]
+      # Workaround compileTime table not finding keys
+      # https://github.com/mratsim/compute-graph-optim/issues/1
+      for key in visited.keys():
+        if hash(key) == hash(ast):
+          return visited[key]
 
-        if ast.kind == Assign:
-          lhs.expectKind(nnkIdent)
-          if varAssign:
-            stmts.add newVarStmt(lhs, rhs)
-          else:
-            stmts.add newAssignment(lhs, rhs)
-          return lhs
-        else:
-          var callStmt = nnkCall.newTree()
-          case ast.kind
-          of Add: callStmt.add SimdTable[arch][simdAdd]
-          of Mul: callStmt.add SimdTable[arch][simdMul]
-          else: raise newException(ValueError, "Unreachable code")
-          callStmt.add lhs
-          callStmt.add rhs
-          let memloc = genSym(nskLet, "memloc_")
-          stmts.add newLetStmt(memloc, callStmt)
-          visited[ast] = memloc
-          return memloc
+      echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
+
+      var callStmt = nnkCall.newTree()
+      var lhsStmt = newStmtList()
+      var rhsStmt = newStmtList()
+
+      let lhs = walkASTSimd(ast.lhs, arch, params, visited, lhsStmt)
+      let rhs = walkASTSimd(ast.rhs, arch, params, visited, rhsStmt)
+
+      stmts.add lhsStmt
+      stmts.add rhsStmt
+
+      case ast.kind
+      of Add: callStmt.add SimdTable[arch][simdAdd]
+      of Mul: callStmt.add SimdTable[arch][simdMul]
+      else: raise newException(ValueError, "Unreachable code")
+
+      callStmt.add lhs
+      callStmt.add rhs
+
+      let memloc = genSym(nskLet, "memloc_")
+      stmts.add newLetStmt(memloc, callStmt)
+      visited[ast] = memloc
+      return memloc
 
 proc initParams(
        procDef,
@@ -871,7 +917,9 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
 
   # echo initParams.toStrLit()
 
-
+  let seqT = nnkBracketExpr.newTree(
+    newIdentNode"seq", newIdentNode"float32"
+  )
 
   # We create the inner SIMD proc, specialized to a SIMD architecture
   # In the inner proc we shadow the original idents ids.
@@ -883,9 +931,6 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
     resultType = resultTy
   )
 
-  let seqT = nnkBracketExpr.newTree(
-    newIdentNode"seq", newIdentNode"float32"
-  )
   var simdProc =  if arch == Sse:
                     procDef[0].replaceType(seqT, newIdentNode"m128")
                   else:
@@ -906,6 +951,7 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
 
   var genericProc = procDef[0].replaceType(seqT, newIdentNode"float32")
   genericProc[6] = genericBody   # Assign to proc body
+  echo genericProc.toStrLit
 
   # We vectorize the inner proc to apply to an contiguous array
   var vecBody: NimNode
@@ -1071,14 +1117,21 @@ macro generate(ast_routine: typed, signature: untyped): untyped =
 proc foobar(a: AstNode, b, c: AstNode): tuple[bar: AstNode, baz, buzz: AstNode] =
 
   let foo = a + b + c
-  result.bar = foo * 2
 
-  result.baz = foo * 3
-  result.buzz = result.baz
+  # Don't use in-place updates
+  # https://github.com/nim-lang/Nim/issues/11637
+  let bar = foo * 2
 
-  result.buzz += a * 10000
-  result.baz += b
-  result.buzz += b
+  var baz = foo * 3
+  var buzz = baz
+
+  buzz += a * 1000
+  baz += b
+  buzz += b
+
+  result.bar = bar
+  result.baz = baz
+  result.buzz = buzz
 
 proc foobar(a: int, b, c: int): tuple[bar, baz, buzz: int] =
   echo "Overloaded proc to test bindings"
@@ -1103,6 +1156,6 @@ let
 
 let (pim, pam, poum) = foobar(u, v, w)
 
-echo pim # 12
-echo pam # 20
+echo pim  # 12
+echo pam  # 20
 echo poum # 10020
