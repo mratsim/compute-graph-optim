@@ -998,7 +998,7 @@ macro generate(ast_routine: typed, signature: untyped): untyped =
     doAssert identdef[^2].eqIdent"AstNode"
     identdef[^1].expectKind(nnkEmpty)
     for idx_ident in 0 .. identdef.len-3:
-      inputs.add identdef[idx_ident]
+      inputs.add genSym(nskLet, $identdef[idx_ident] & "_")
 
   # Allocate inputs
   result = newStmtList()
@@ -1036,7 +1036,7 @@ macro generate(ast_routine: typed, signature: untyped): untyped =
   #     callAssign
   #   )
   else: # Case 3: single return value
-    callAssign = ct(ident"callResult")
+    callAssign = ct(genSym(nskLet, "callResult_"))
     result.add newLetStmt(
       callAssign, call
     )
@@ -1060,19 +1060,6 @@ macro generate(ast_routine: typed, signature: untyped): untyped =
 
   result.add quote do:
     compile(Sse, `io`, `signature`)
-
-  # Wrap that in a template
-  # We want the AST to be scoped, inaccessible and discarded at the end of the scope
-  # But we want the generated proc to be visible after the scope
-  let genName = ident("generated_" & $ast_routine)
-  result = nnkStmtList.newTree(
-    newProc(
-      name = genName,
-      body = result,
-      procType = nnkTemplateDef
-    ),
-    newCall(genName)
-  )
 
   echo result.toStrlit
 # ###########################
@@ -1099,17 +1086,6 @@ proc foobar(a: int, b, c: int): tuple[bar, baz, buzz: int] =
 
 generate foobar:
   proc foobar(a: seq[float32], b, c: seq[float32]): tuple[bar: seq[float32], baz, buzz: seq[float32]]
-
-# template generated_foobar() =
-#   let a {.compileTime.} = input(0)
-#   let b {.compileTime.} = input(1)
-#   let c {.compileTime.} = input(2)
-#   let callResult {.compileTime.} = foobar(a, b, c)
-#   compile(Sse, [a, b, c, callResult[0], callResult[1], callResult[2]]):
-#     proc foobar(a: seq[float32]; b, c: seq[float32]): tuple[bar: seq[float32],
-#         baz, buzz: seq[float32]]
-
-# generated_foobar()
 
 # Note to use aligned store, SSE requires 16-byte alignment and AVX 32-byte alignment
 # Unfortunately there is no way with normal seq to specify that (pending destructors)
