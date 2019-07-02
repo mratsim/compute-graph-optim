@@ -368,9 +368,9 @@ proc walkASTGeneric(
       # https://github.com/mratsim/compute-graph-optim/issues/1
       for key in visited.keys():
         if hash(key) == hash(ast):
+          {.warning: "Triggered compile-time table 'Key not found' workaround".}
           return visited[key]
 
-      echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
       var varAssign = false
 
       if ast.lhs notin visited and
@@ -403,9 +403,8 @@ proc walkASTGeneric(
       # https://github.com/mratsim/compute-graph-optim/issues/1
       for key in visited.keys():
         if hash(key) == hash(ast):
+          {.warning: "Triggered compile-time table 'Key not found' workaround".}
           return visited[key]
-
-      echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
 
       var callStmt = nnkCall.newTree()
       var lhsStmt = newStmtList()
@@ -474,7 +473,6 @@ proc walkASTSimd(
         if hash(key) == hash(ast):
           return visited[key]
 
-      echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
       var varAssign = false
 
       if ast.lhs notin visited and
@@ -508,8 +506,6 @@ proc walkASTSimd(
       for key in visited.keys():
         if hash(key) == hash(ast):
           return visited[key]
-
-      echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
 
       var callStmt = nnkCall.newTree()
       var lhsStmt = newStmtList()
@@ -938,7 +934,7 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
 
 
   simdProc[6] = simdBody   # Assign to proc body
-  # echo simdProc.toStrLit
+  echo simdProc.toStrLit
 
   # We create the inner generic proc
   let genericBody = innerProcGen(
