@@ -1017,25 +1017,26 @@ macro generate(ast_routine: typed, signature: untyped): untyped =
     )
 
   # Call the AST routine
-  let call = newCall("static", newCall(ast, inputs))
+  let call = newCall(ast, inputs)
   var callAssign: NimNode
   case sig[0].kind
   of nnkEmpty: # Case 1: no result
     result.add call
-  of nnkTupleTy: # Case 2: tuple result
-    callAssign = nnkVarTuple.newTree()
-    for identdef in sig[0]:
-      doAssert identdef[^2].eqIdent"AstNode"
-      identdef[^1].expectKind(nnkEmpty)
-      for idx_ident in 0 .. identdef.len-3:
-        callAssign.add ct(identdef[idx_ident])
-    callAssign.add newEmptyNode()
-    callAssign.add call
-    result.add nnkLetSection.newTree(
-      callAssign
-    )
+  # Compile-time tuple destructuring is bugged - https://github.com/nim-lang/Nim/issues/11634
+  # of nnkTupleTy: # Case 2: tuple result
+  #   callAssign = nnkVarTuple.newTree()
+  #   for identdef in sig[0]:
+  #     doAssert identdef[^2].eqIdent"AstNode"
+  #     identdef[^1].expectKind(nnkEmpty)
+  #     for idx_ident in 0 .. identdef.len-3:
+  #       callAssign.add ct(identdef[idx_ident])
+  #   callAssign.add newEmptyNode()
+  #   callAssign.add call
+  #   result.add nnkLetSection.newTree(
+  #     callAssign
+  #   )
   else: # Case 3: single return value
-    callAssign = ident"callResult"
+    callAssign = ct(ident"callResult")
     result.add newLetStmt(
       callAssign, call
     )
@@ -1046,18 +1047,31 @@ macro generate(ast_routine: typed, signature: untyped): untyped =
   of nnkEmpty:
     discard
   of nnkTupleTy:
-    for idx in 0 .. callAssign.len-3:
-      io.add callAssign[idx]
+    var idx = 0
+    for identdef in sig[0]:
+      for idx_ident in 0 .. identdef.len-3:
+        io.add nnkBracketExpr.newTree(
+          callAssign[0],
+          newLit idx
+        )
+        inc idx
   else:
     io.add callAssign
-  # let io_array = quote do: `io`
-  # result.add getAst(
-  #   compile(Sse, io_array, signature)
-  # )
 
-  result = newBlockStmt(
-    genSym(nskLabel, "generated_" & $ast_routine & "_"),
-    result
+  result.add quote do:
+    compile(Sse, `io`, `signature`)
+
+  # Wrap that in a template
+  # We want the AST to be scoped, inaccessible and discarded at the end of the scope
+  # But we want the generated proc to be visible after the scope
+  let genName = ident("generated_" & $ast_routine)
+  result = nnkStmtList.newTree(
+    newProc(
+      name = genName,
+      body = result,
+      procType = nnkTemplateDef
+    ),
+    newCall(genName)
   )
 
   echo result.toStrlit
@@ -1086,22 +1100,33 @@ proc foobar(a: int, b, c: int): tuple[bar, baz, buzz: int] =
 generate foobar:
   proc foobar(a: seq[float32], b, c: seq[float32]): tuple[bar: seq[float32], baz, buzz: seq[float32]]
 
-# # Note to use aligned store, SSE requires 16-byte alignment and AVX 32-byte alignment
-# # Unfortunately there is no way with normal seq to specify that (pending destructors)
-# # As a hack, we use the unaligned load and store simd, and a required alignment of 4,
-# # in practice we define our own tensor type
-# # with aligned allocator
+# template generated_foobar() =
+#   let a {.compileTime.} = input(0)
+#   let b {.compileTime.} = input(1)
+#   let c {.compileTime.} = input(2)
+#   let callResult {.compileTime.} = foobar(a, b, c)
+#   compile(Sse, [a, b, c, callResult[0], callResult[1], callResult[2]]):
+#     proc foobar(a: seq[float32]; b, c: seq[float32]): tuple[bar: seq[float32],
+#         baz, buzz: seq[float32]]
 
-# import sequtils
+# generated_foobar()
 
-# let
-#   len = 10
-#   u = newSeqWith(len, 1'f32)
-#   v = newSeqWith(len, 2'f32)
-#   w = newSeqWith(len, 3'f32)
+# Note to use aligned store, SSE requires 16-byte alignment and AVX 32-byte alignment
+# Unfortunately there is no way with normal seq to specify that (pending destructors)
+# As a hack, we use the unaligned load and store simd, and a required alignment of 4,
+# in practice we define our own tensor type
+# with aligned allocator
 
-# let (pim, pam, poum) = foobar(u, v, w)
+import sequtils
 
-# echo pim # 12
-# echo pam # 20
-# echo poum # 10020
+let
+  len = 10
+  u = newSeqWith(len, 1'f32)
+  v = newSeqWith(len, 2'f32)
+  w = newSeqWith(len, 3'f32)
+
+let (pim, pam, poum) = foobar(u, v, w)
+
+echo pim # 12
+echo pam # 20
+echo poum # 10020
