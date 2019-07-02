@@ -364,6 +364,12 @@ proc walkASTGeneric(
       if ast in visited:
         return visited[ast]
 
+      # Workaround compileTime table not finding keys
+      # https://github.com/mratsim/compute-graph-optim/issues/1
+      for key in visited.keys():
+        if hash(key) == hash(ast):
+          return visited[key]
+
       echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
       var varAssign = false
 
@@ -373,33 +379,31 @@ proc walkASTGeneric(
             ast.rhs notin visited:
           varAssign = true
 
-      var lhsStmt = newStmtList()
-      let lhs = walkASTGeneric(ast.lhs, params, visited, lhsStmt)
-      stmts.add lhsStmt
-
       var rhsStmt = newStmtList()
       let rhs = walkASTGeneric(ast.rhs, params, visited, rhsStmt)
       stmts.add rhsStmt
+
+      var lhsStmt = newStmtList()
+      let lhs = walkASTGeneric(ast.lhs, params, visited, lhsStmt)
+      stmts.add lhsStmt
 
       lhs.expectKind(nnkIdent)
       if varAssign:
         stmts.add newVarStmt(lhs, rhs)
       else:
         stmts.add newAssignment(lhs, rhs)
-      visited[ast] = lhs
+      # visited[ast] = lhs # Already done
       return lhs
 
     of Add, Mul:
       if ast in visited:
         return visited[ast]
 
-      if hash(ast) == 6289576662490420451 and visited.len > 3:
-        echo "#####   Visited Nodes list  #####"
-        for key in visited.keys():
-          echo hash(key), " - match: ", hash(key) == hash(ast)
-        echo "Hash: ", hash(ast)
-        echo "visited: ", visited.hasKey(ast)
-        raise newException(ValueError, "STOP")
+      # Workaround compileTime table not finding keys
+      # https://github.com/mratsim/compute-graph-optim/issues/1
+      for key in visited.keys():
+        if hash(key) == hash(ast):
+          return visited[key]
 
       echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
 
@@ -460,52 +464,75 @@ proc walkASTSimd(
             expression
           )
         return newIdentNode(ast.symLVal)
-    of Assign, Add, Mul:
+    of Assign:
       if ast in visited:
-        return # nil
+        return visited[ast]
+
+      # Workaround compileTime table not finding keys
+      # https://github.com/mratsim/compute-graph-optim/issues/1
+      for key in visited.keys():
+        if hash(key) == hash(ast):
+          return visited[key]
+
+      echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
+      var varAssign = false
+
+      if ast.lhs notin visited and
+            ast.lhs.kind == LVal and
+            ast.lhs.prev_version.isNil and
+            ast.rhs notin visited:
+          varAssign = true
+
+      var rhsStmt = newStmtList()
+      let rhs = walkASTSimd(ast.rhs, arch, params, visited, rhsStmt)
+      stmts.add rhsStmt
+
+      var lhsStmt = newStmtList()
+      let lhs = walkASTSimd(ast.lhs, arch, params, visited, lhsStmt)
+      stmts.add lhsStmt
+
+      lhs.expectKind(nnkIdent)
+      if varAssign:
+        stmts.add newVarStmt(lhs, rhs)
       else:
-        var varAssign = false
+        stmts.add newAssignment(lhs, rhs)
+      # visited[ast] = lhs # Already done
+      return lhs
 
-        var lhs: NimNode
-        if ast.lhs notin visited:
-          if ast.lhs.kind == LVal and
-              ast.lhs.prev_version.isNil and
-              ast.rhs notin visited:
-            varAssign = true
-          var lhsStmt = newStmtList()
-          lhs = walkASTSimd(ast.lhs, arch, params, visited, lhsStmt)
-          stmts.add lhsStmt
-        else:
-          lhs = visited[ast.lhs]
+    of Add, Mul:
+      if ast in visited:
+        return visited[ast]
 
-        var rhs: NimNode
-        if ast.rhs notin visited:
-          var rhsStmt = newStmtList()
-          rhs = walkASTSimd(ast.rhs, arch, params, visited, rhsStmt)
-          stmts.add rhsStmt
-          # visited[ast.rhs] = rhs # Done in previous walkASTSimd call
-        else:
-          rhs = visited[ast.rhs]
+      # Workaround compileTime table not finding keys
+      # https://github.com/mratsim/compute-graph-optim/issues/1
+      for key in visited.keys():
+        if hash(key) == hash(ast):
+          return visited[key]
 
-        if ast.kind == Assign:
-          lhs.expectKind(nnkIdent)
-          if varAssign:
-            stmts.add newVarStmt(lhs, rhs)
-          else:
-            stmts.add newAssignment(lhs, rhs)
-          return lhs
-        else:
-          var callStmt = nnkCall.newTree()
-          case ast.kind
-          of Add: callStmt.add SimdTable[arch][simdAdd]
-          of Mul: callStmt.add SimdTable[arch][simdMul]
-          else: raise newException(ValueError, "Unreachable code")
-          callStmt.add lhs
-          callStmt.add rhs
-          let memloc = genSym(nskLet, "memloc_")
-          stmts.add newLetStmt(memloc, callStmt)
-          visited[ast] = memloc
-          return memloc
+      echo "Hash/Type: ", ast.hash, "/", ast.kind, " visited: ", ast in visited
+
+      var callStmt = nnkCall.newTree()
+      var lhsStmt = newStmtList()
+      var rhsStmt = newStmtList()
+
+      let lhs = walkASTSimd(ast.lhs, arch, params, visited, lhsStmt)
+      let rhs = walkASTSimd(ast.rhs, arch, params, visited, rhsStmt)
+
+      stmts.add lhsStmt
+      stmts.add rhsStmt
+
+      case ast.kind
+      of Add: callStmt.add SimdTable[arch][simdAdd]
+      of Mul: callStmt.add SimdTable[arch][simdMul]
+      else: raise newException(ValueError, "Unreachable code")
+
+      callStmt.add lhs
+      callStmt.add rhs
+
+      let memloc = genSym(nskLet, "memloc_")
+      stmts.add newLetStmt(memloc, callStmt)
+      visited[ast] = memloc
+      return memloc
 
 proc initParams(
        procDef,
@@ -890,34 +917,28 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
 
   # echo initParams.toStrLit()
 
-  echo "######## result.bar"
-  echo io[3]
-
-  echo "\n######## result.baz"
-  echo io[4]
-
   let seqT = nnkBracketExpr.newTree(
     newIdentNode"seq", newIdentNode"float32"
   )
 
-  # # We create the inner SIMD proc, specialized to a SIMD architecture
-  # # In the inner proc we shadow the original idents ids.
-  # let simdBody = innerProcGen(
-  #   genSimd = true,
-  #   arch = arch,
-  #   io = io,
-  #   ids = ids,
-  #   resultType = resultTy
-  # )
+  # We create the inner SIMD proc, specialized to a SIMD architecture
+  # In the inner proc we shadow the original idents ids.
+  let simdBody = innerProcGen(
+    genSimd = true,
+    arch = arch,
+    io = io,
+    ids = ids,
+    resultType = resultTy
+  )
 
-  # var simdProc =  if arch == Sse:
-  #                   procDef[0].replaceType(seqT, newIdentNode"m128")
-  #                 else:
-  #                   procDef[0].replaceType(seqT, newIdentNode"m256")
+  var simdProc =  if arch == Sse:
+                    procDef[0].replaceType(seqT, newIdentNode"m128")
+                  else:
+                    procDef[0].replaceType(seqT, newIdentNode"m256")
 
 
-  # simdProc[6] = simdBody   # Assign to proc body
-  # # echo simdProc.toStrLit
+  simdProc[6] = simdBody   # Assign to proc body
+  # echo simdProc.toStrLit
 
   # We create the inner generic proc
   let genericBody = innerProcGen(
@@ -953,7 +974,7 @@ macro compile(arch: static SimdArch, io: static varargs[AstNode], procDef: untyp
   let resBody = newStmtList()
   resBody.add initParams
   resBody.add genericProc
-  # resBody.add simdProc
+  resBody.add simdProc
   resBody.add vecBody
   result[0][6] = resBody
 
